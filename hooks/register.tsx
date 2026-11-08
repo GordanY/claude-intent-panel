@@ -2336,7 +2336,10 @@ export const register: Register = on => {
       isOneLine = false,
     ) => (
       <Box key={key} flexDirection="row" gap={1} flexGrow={1} flexShrink={1}>
-        <Text {...look}>{head}</Text>
+        {/* The head keeps its width: squeezed, "○ 34." would break over two lines. */}
+        <Box flexShrink={0}>
+          <Text {...look}>{head}</Text>
+        </Box>
         <Box flexGrow={1} flexShrink={1}>
           <Text {...look} wrap={isOneLine ? 'truncate-end' : 'wrap'}>
             {body}
@@ -2417,7 +2420,20 @@ export const register: Register = on => {
     const finishedAt = (one: Intent) =>
       Math.max(0, ...[one, ...partsOf(list, one.id)].flatMap(x => (x.history ?? []).filter(h => h.what === 'met' || h.what === 'confirmed').map(h => h.at)))
     const latestDone = [...doneRequests].sort((a, b) => finishedAt(b) - finishedAt(a) || Number(b.id) - Number(a.id))
-    const showAllDone = await read($, isDoneAll)
+    // Every finished request shows when the pane has room for them all (docked, its rows known); otherwise the
+    // latest five, the rest behind "show all".
+    const rowsOf = (text: string, indentCells: number) => Math.max(1, Math.ceil(cells(text) / Math.max(10, columns - indentCells)))
+    const itemRows = (one: Intent, indentCells: number) => rowsOf(`${one.mine || one.ai}`, indentCells + cells(`○ ${labelOf(list, one)}.`) + 3)
+    const openRows = requests
+      .filter(one => !isDone(list, one))
+      .reduce((sum, one) => {
+        const parts = partsOf(list, one.id).filter(part => !isSettled(part))
+        return sum + 2 + itemRows(one, 4) + parts.reduce((n, part) => n + itemRows(part, 6) + (part.isActive ? rowsOf(part.check, 8) : 0), 0)
+      }, 0)
+    const fixedRows = 3 + (p.mine && p.ai && p.mine !== p.ai ? 1 : 0) + Object.keys(await read($, background)).length + 14
+    const allDoneRows = doneRequests.reduce((sum, one) => sum + itemRows(one, 2), 0)
+    const hasRoom = fill !== undefined && fixedRows + openRows + allDoneRows <= fill
+    const showAllDone = hasRoom || (await read($, isDoneAll))
     const shownDone = showAllDone ? latestDone : latestDone.slice(0, DONE_SHOWN)
     const doneGroup = doneRequests.length > 0 && (
       <Box flexDirection="column">
@@ -2442,7 +2458,6 @@ export const register: Register = on => {
                     `✓ ${one.id}.`,
                     `${one.mine || one.ai}${parts.length === 0 && doneTags(one).length > 0 ? t.paren(doneTags(one).join(' · ')) : ''}`,
                     { color: pal.done },
-                    details !== one.id,
                   )}
                   <Button
                     key={`details-${one.id}`}
@@ -2459,7 +2474,6 @@ export const register: Register = on => {
                       `✓ ${labelOf(list, part)}.`,
                       `${part.mine || part.ai}${doneTags(part).length > 0 ? t.paren(doneTags(part).join(' · ')) : ''}`,
                       { color: pal.done },
-                      details !== one.id,
                     )}
                   </Box>
                 ))}
@@ -2467,7 +2481,7 @@ export const register: Register = on => {
               </Box>
             )
           })}
-        {isDoneShown && doneRequests.length > DONE_SHOWN && (
+        {isDoneShown && doneRequests.length > DONE_SHOWN && !hasRoom && (
           <Button
             key="done-all"
             label={showAllDone ? t.showLatest(DONE_SHOWN) : t.showAll(doneRequests.length)}

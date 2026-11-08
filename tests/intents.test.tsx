@@ -2550,9 +2550,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
       const kids = line.children as { type?: string; props?: Record<string, unknown> }[]
       expect(kids.length).toBe(2)
       expect(kids[1]?.props?.flexShrink).toBe(1)
-      // A finished item keeps to one line, cut with "…"; an open one wraps.
-      expect(JSON.stringify(kids[1])).toContain(line.key?.startsWith('line-done-') ? '"wrap":"truncate-end"' : '"wrap":"wrap"')
-      expect(JSON.stringify(kids[0])).not.toContain('"wrap":"wrap"')
+      // Words wrap, finished ones too (never cut with "…"); the head ("○ 34.") sits in a column that never shrinks.
+      expect(JSON.stringify(kids[1])).toContain('"wrap":"wrap"')
+      expect(JSON.stringify(kids[1])).not.toContain('truncate')
+      expect(kids[0]?.props?.flexShrink).toBe(0)
     }
     // The lines under an item start where its words do: the mark and its gap, the head, one space.
     const under = (text: RegExp) => boxes.find(box => box.props.paddingLeft !== undefined && text.test(box.text ?? ''))?.props.paddingLeft
@@ -2641,11 +2642,10 @@ test('a tick the observer could not match shows ⚠ and does not count', async (
   await pane.unmount()
 })
 
-test('the done group shows the latest five, the rest behind show all', async ($, on) => {
+test('the done group shows every item when the pane has room, the latest five when it has not, and never cuts words', async ($, on) => {
   engine(on)
   await start($)
   const words = ['一號需求要做', '二號需求要做', '三號需求要做', '四號需求要做', '五號需求要做', '六號需求要做', '七號需求要做']
-  await $.tool.call({ tool: ADD, intents: words.map((w, n) => ({ summary: w, check: `Check${n + 1}Tests 通過`, source: w })) } as never)
   ui.messages = [ASK, { role: 'user', text: words.join('，'), toolUses: [] }]
   await $.tool.call({ tool: ADD, intents: words.map((w, n) => ({ summary: w, check: `Check${n + 1}Tests 通過`, source: w })) } as never)
   // Ticked in the order 3, 1, 2, 4, 5, 6, 7 (7 last).
@@ -2653,14 +2653,23 @@ test('the done group shows the latest five, the rest behind show all', async ($,
     await $.tool.call({ tool: MET, id, evidence: `Check${id}Tests 通過` } as never)
     await ui.clock.advance(1_000)
   }
-  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const done = async (pane: Findable) => (await texts(pane)).filter(x => x.startsWith('✓ ')).map(x => x.split('.')[0])
+  // Docked with room to spare: all seven, latest first, no "show all".
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await pane.press({ key: 'done-toggle' })
-  const done = async () => (await texts(pane)).filter(x => x.startsWith('✓ ')).map(x => x.split('.')[0])
-  expect(await done()).toEqual(['✓ 7', '✓ 6', '✓ 5', '✓ 4', '✓ 2'])
+  expect(await done(pane)).toEqual(['✓ 7', '✓ 6', '✓ 5', '✓ 4', '✓ 2', '✓ 1', '✓ 3'])
+  expect(await pane.find({ type: 'Button', key: 'done-all' })).toBeUndefined()
+  await pane.unmount()
+  // Too few rows for them all: the latest five, the rest behind "show all".
+  pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, scroll: { offset: 0, bodyRows: 18 } }, surface: 'terminal' })
+  expect(await done(pane)).toEqual(['✓ 7', '✓ 6', '✓ 5', '✓ 4', '✓ 2'])
   expect((await pane.find({ type: 'Button', key: 'done-all' }))?.text).toBe('顯示全部 7 項')
   await pane.press({ key: 'done-all' })
-  expect(await done()).toEqual(['✓ 7', '✓ 6', '✓ 5', '✓ 4', '✓ 2', '✓ 1', '✓ 3'])
+  expect(await done(pane)).toEqual(['✓ 7', '✓ 6', '✓ 5', '✓ 4', '✓ 2', '✓ 1', '✓ 3'])
   expect((await pane.find({ type: 'Button', key: 'done-all' }))?.text).toBe('只顯示最近 5 項')
+  // Nothing finished is cut short.
+  const cut = (await pane.findAll({ type: 'Text' })).filter(one => String(one.props.wrap ?? '').startsWith('truncate'))
+  expect(cut.map(one => one.text)).toEqual([])
   await pane.unmount()
 })
 
@@ -2677,5 +2686,23 @@ test('a check line shows only for a part being worked on; ⋯ shows the others',
   await pane.press({ key: 'details-p2' })
   shown = await texts(pane)
   expect(shown).toContain('檢查：SwitchDraftTests 通過')
+  await pane.unmount()
+})
+
+test("a line's mark and number never wrap: their column does not shrink", async ($, on) => {
+  engine(on)
+  await seed($)
+  await $.tool.call({ tool: ADD, intents: [{ summary: '一個非常長的分項說明，長到一定會換行，而且還要更長一點才夠', check: 'LongTests 通過', parent: '1' }] } as never)
+  await $.tool.call({ tool: MET, id: '2', evidence: 'git diff 不含 Sync/' } as never)
+  const pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 24 }, surface: 'terminal' })
+  await pane.press({ key: 'done-toggle' })
+  const lines = (await pane.findAll({ type: 'Box' })).filter(box => box.key?.startsWith('line-'))
+  expect(lines.length).toBe(3)
+  for (const line of lines) {
+    const head = (line.children as { props?: Record<string, unknown> }[])[0]
+    // The head's own column keeps its width; only the words beside it wrap.
+    expect(head?.props?.flexShrink).toBe(0)
+    expect(JSON.stringify(head)).not.toContain('"wrap"')
+  }
   await pane.unmount()
 })
