@@ -31,6 +31,8 @@ const SAVED = {
 /** Panes the engine holds open, and how many times the mod opened one. */
 const ui = {
   up: new Set<string>(),
+  /** The background the pane was last opened with. */
+  background: undefined as string | undefined,
   opens: 0,
   registered: 0,
   clock: null as unknown as ReturnType<typeof mock.clock>,
@@ -99,6 +101,7 @@ function engine(
   on('ui.open', (_, e) => {
     ui.up.add(e.id)
     ui.opens += 1
+    ui.background = (e as { backgroundColor?: string }).backgroundColor
     return { value: { isPlaced: true } }
   })
   on('ui.close', (_, e) => {
@@ -2348,5 +2351,37 @@ test('the footer offers a dark or light color scheme after the language', async 
   expect((await pane.find({ type: 'Button', key: 'scheme' }))?.text).toBe('◐ 深色')
   // (The done group is still open from before.)
   expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.props.color).toBe('#5fd77a')
+  await pane.unmount()
+})
+
+test('the scheme colors the progress bar and the pane background', async ($, on) => {
+  const store = engine(on)
+  await seed($)
+  await $.tool.call({ tool: MET, id: '1', evidence: 'DraftPersistTests 3/3 通過' } as never)
+  expect(ui.background).toBeUndefined()
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // Auto: the bar as before, one dim line.
+  expect((await pane.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
+  // Dark, then light: the background is painted and the bar's done share takes the scheme's color.
+  await pane.press({ key: 'scheme' })
+  expect(ui.background).toBe('#1e1f22')
+  await pane.press({ key: 'scheme' })
+  expect(store.get('settings:theme')).toBe('light')
+  expect(ui.background).toBe('#f6f8fa')
+  expect((await pane.find({ type: 'Text', text: /^▓+$/ }))?.props.color).toBe('#1a7f37')
+  expect((await pane.find({ type: 'Text', text: /^░+ 1\/2$/ }))?.props.dimColor).toBe(true)
+  // Every text on the light background has a color of its own: none is left in the terminal's.
+  const all = await pane.findAll({ type: 'Text' })
+  expect(all.length).toBeGreaterThan(5)
+  expect(all.filter(one => typeof one.props.color !== 'string').map(one => one.text)).toEqual([])
+  expect((await pane.find({ type: 'Text', text: /草稿要保留|不要動到同步/ }))?.props.color).toBe('#1f2328')
+  // Button labels too, and they still press.
+  const scheme = await pane.find({ type: 'Button', key: 'scheme' })
+  expect(scheme?.text).toBe('◐ 淺色')
+  expect(JSON.stringify(scheme?.children)).toContain('#1f2328')
+  // Back to auto: the background is the surface's own again.
+  await pane.press({ key: 'scheme' })
+  expect(ui.background).toBeUndefined()
+  expect((await pane.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
   await pane.unmount()
 })

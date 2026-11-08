@@ -103,13 +103,16 @@ const asScheme = (value: unknown): Scheme => (SCHEMES.includes(value as Scheme) 
 /**
  * The pane's colors for each scheme: done, being worked on, needs a look, and
  * danger, and the bar's fill. Auto keeps the terminal's named colors; dark and
- * light use shades that read on that background. Only colors the mod paints
- * change: text and buttons keep the surface's own, so nothing turns unreadable.
+ * light paint the pane's background too, and give every text and button
+ * label its own color on it, so nothing is left in the surface's color.
  */
-const PALETTES: Record<Scheme, { done: string; now: string; warn: string; danger: string; bar: string }> = {
+const PALETTES: Record<
+  Scheme,
+  { done: string; now: string; warn: string; danger: string; bar: string; background?: string; text?: string }
+> = {
   auto: { done: 'green', now: 'cyan', warn: 'yellow', danger: 'red', bar: '#4caf50' },
-  dark: { done: '#5fd77a', now: '#56c8f0', warn: '#f0c674', danger: '#ff7b72', bar: '#5fd77a' },
-  light: { done: '#1a7f37', now: '#0969da', warn: '#9a6700', danger: '#cf222e', bar: '#1a7f37' },
+  dark: { done: '#5fd77a', now: '#56c8f0', warn: '#f0c674', danger: '#ff7b72', bar: '#5fd77a', background: '#1e1f22', text: '#e6e6e6' },
+  light: { done: '#1a7f37', now: '#0969da', warn: '#9a6700', danger: '#cf222e', bar: '#1a7f37', background: '#f6f8fa', text: '#1f2328' },
 }
 /** Every text the person writes in the pane, per worktree, only ever appended to: what was replaced can be found again. */
 const MINE_LOG_KEY = 'mine:'
@@ -544,7 +547,9 @@ async function refreshTitle($: EngineInterface, isAsked = false): Promise<void> 
   const { met, total } = progress(await read($, intents))
   const t = strings(await read($, lang))
   const title = total === 0 ? t.title : `${t.title} ${met}/${total}`
-  await $.ui.open({ id: PANE, title })
+  // Dark or light paint the pane's background; auto leaves the surface's own look (an open without it resets it).
+  const background = PALETTES[await read($, scheme)].background
+  await $.ui.open({ id: PANE, title, ...(background ? { backgroundColor: background } : {}) })
 }
 
 /**
@@ -1237,7 +1242,10 @@ async function activate($: EngineInterface): Promise<void> {
       const sharedObserving = (await $.store.get(OBSERVER_KEY)) !== false
       if (sharedObserving !== (await read($, isObserverOn))) await update($, isObserverOn, () => sharedObserving)
       const sharedScheme = asScheme(await $.store.get(SCHEME_KEY))
-      if (sharedScheme !== (await read($, scheme))) await update($, scheme, () => sharedScheme)
+      if (sharedScheme !== (await read($, scheme))) {
+        await update($, scheme, () => sharedScheme)
+        await refreshTitle($)
+      }
     })().catch(() => undefined)
   })
 }
@@ -1783,8 +1791,21 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Input } = $.ui.resolve(e)
     const table = $.ui.resolve(e)
+    const { Box, Input } = table
+    const pal = PALETTES[await read($, scheme)]
+    // On a painted background every text and button label gets the scheme's own color: one left in the
+    // surface's color (light text from a dark terminal) could vanish against it.
+    type TextArgs = Parameters<typeof table.Text>[0]
+    type ButtonArgs = Parameters<typeof table.Button>[0]
+    const Text = (props: TextArgs) => table.Text(pal.text && props.color === undefined ? { ...props, color: pal.text } : props)
+    const Button = (props: ButtonArgs) => {
+      const label = (props as { label?: string }).label
+      const kids = (props as { children?: unknown }).children
+      const hasKids = Array.isArray(kids) ? kids.length > 0 : kids !== undefined
+      if (!pal.text || !label || hasKids) return table.Button(props)
+      return table.Button({ ...props, children: [table.Text({ color: pal.text, dimColor: props.dimColor, children: [label] } as TextArgs)] } as ButtonArgs)
+    }
     // The terminal draws a line of box characters sized to the pane's columns;
     // a desktop (proportional font) wraps such a line, so it gets a 1px rule.
     const rule =
@@ -1804,7 +1825,6 @@ export const register: Register = on => {
     const checker = await read($, driftModel)
     const observing = await read($, isObserverOn)
     const colors = await read($, scheme)
-    const pal = PALETTES[colors]
     const t = strings(chosen)
     const mainModel = modelName(await $.session.model().catch(() => t.mainSession))
     const columns = e.props.bodyColumns ?? 40
@@ -1987,6 +2007,7 @@ export const register: Register = on => {
               const next = SCHEMES[(SCHEMES.indexOf(colors) + 1) % SCHEMES.length] ?? 'auto'
               await update($, scheme, () => next)
               await $.store.set(SCHEME_KEY, next)
+              await refreshTitle($)
             }}
           />
         </Box>
@@ -2091,10 +2112,20 @@ export const register: Register = on => {
     const filled = Math.round(share * barWidth)
     const progressBar =
       e.surface === 'terminal' || !('Svg' in table) ? (
-        <Text dimColor>
-          {'▓'.repeat(filled)}
-          {'░'.repeat(barWidth - filled)} {countLabel}
-        </Text>
+        colors === 'auto' ? (
+          <Text dimColor>
+            {'▓'.repeat(filled)}
+            {'░'.repeat(barWidth - filled)} {countLabel}
+          </Text>
+        ) : (
+          // The done share in the scheme's color, the rest dim.
+          <Box flexDirection="row">
+            {filled > 0 && <Text key="bar-done" color={pal.bar}>{'▓'.repeat(filled)}</Text>}
+            <Text key="bar-rest" dimColor>
+              {'░'.repeat(barWidth - filled)} {countLabel}
+            </Text>
+          </Box>
+        )
       ) : (
         <Box flexDirection="row" gap={1} alignItems="center">
           <Box flexGrow={1}>
