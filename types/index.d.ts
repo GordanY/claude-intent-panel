@@ -30,6 +30,10 @@ declare module 'claude-code' {
       loadedRoot: string | null
       /** The person closed the pane by hand in this session: list changes no longer reopen it. */
       isClosedByPerson: boolean
+      /** When the list last changed (ms since the epoch); null before any change. */
+      updatedAt: number | null
+      /** The clock the footer's "N 分鐘前" reads, ticked once a minute. */
+      now: number
     }
   }
 }

@@ -28,6 +28,11 @@ const editing = atom({ plugin: 'intent-tracker', key: 'editing' } as const, null
 const isDirty = atom({ plugin: 'intent-tracker', key: 'isDirty' } as const, false)
 const loadedRoot = atom({ plugin: 'intent-tracker', key: 'loadedRoot' } as const, null as string | null)
 const isClosedByPerson = atom({ plugin: 'intent-tracker', key: 'isClosedByPerson' } as const, false)
+const updatedAt = atom({ plugin: 'intent-tracker', key: 'updatedAt' } as const, null as number | null)
+const now = atom({ plugin: 'intent-tracker', key: 'now' } as const, 0)
+
+/** The model the drift check runs on (the session's own model does the rest). */
+const DRIFT_MODEL = 'haiku'
 
 const START_PROMPT =
   '（目標面板）請依目前為止的對話，整理這次工作的原意和目標：' +
@@ -40,7 +45,7 @@ const REFRESH_PROMPT =
   `先用 ${TOOL('intent_list')} 讀目前的清單，再用 ${TOOL('intent_revise')} 更新（原意用它的 purpose 欄位）；檢查其實沒有通過的目標用 reopen 取消打勾，確實通過但還沒勾的用 ${TOOL('intent_met')} 補上依據。` +
   '不要改動我自己寫的字；我的字跟你的摘要不一致時，以我的字為準。整理完用一兩句話告訴我改了什麼。'
 
-type Saved = { purpose: Purpose; intents: Intent[]; drift: Drift | null }
+type Saved = { purpose: Purpose; intents: Intent[]; drift: Drift | null; updatedAt?: number }
 
 const INSTRUCTIONS = `# Intent pane (intent-tracker mod)
 A pane beside the chat shows the person, in plain Traditional Chinese, what the work in this worktree is for and which goals are met, so they do not get lost when the conversation turns technical. The list is kept per worktree across sessions. Keep it accurate and quiet (do not narrate these calls):
@@ -150,7 +155,31 @@ function asSaved(value: unknown): Saved | null {
   if (typeof value !== 'object' || value === null) return null
   const v = value as Partial<Saved>
   if (!Array.isArray(v.intents) || typeof v.purpose !== 'object' || v.purpose === null) return null
-  return { purpose: v.purpose, intents: v.intents, drift: v.drift ?? null }
+  return {
+    purpose: v.purpose,
+    intents: v.intents,
+    drift: v.drift ?? null,
+    ...(typeof v.updatedAt === 'number' ? { updatedAt: v.updatedAt } : {}),
+  }
+}
+
+/** "剛剛", "10 分鐘前", "3 小時前", "2 天前". */
+function ago(at: number, nowMs: number): string {
+  const minutes = Math.floor(Math.max(0, nowMs - at) / 60_000)
+  if (minutes < 1) return '剛剛'
+  if (minutes < 60) return `${minutes} 分鐘前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小時前`
+  return `${Math.floor(hours / 24)} 天前`
+}
+
+/** "claude-opus-5-5" → "Opus 5.5"; "haiku" → "Haiku"; anything else as given. */
+function modelName(id: string): string {
+  const m = id.match(/(opus|sonnet|haiku|fable)(?:-(\d+)(?:[-.](\d+))?)?/i)
+  if (!m || !m[1]) return id
+  const family = m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase()
+  const version = m[2] ? ` ${m[2]}${m[3] ? `.${m[3]}` : ''}` : ''
+  return family + version
 }
 
 /**
@@ -185,6 +214,7 @@ async function sync($: EngineInterface): Promise<void> {
   await update($, purpose, () => saved?.purpose ?? { ai: '', mine: '' })
   await update($, intents, () => saved?.intents ?? [])
   await update($, drift, () => saved?.drift ?? null)
+  await update($, updatedAt, () => saved?.updatedAt ?? null)
   await update($, editing, () => null)
   // A list carried over from an earlier session reaches the model at the next prompt.
   await update($, isDirty, () => (saved?.intents.length ?? 0) > 0)
@@ -196,10 +226,14 @@ async function sync($: EngineInterface): Promise<void> {
 async function save($: EngineInterface): Promise<void> {
   const root = await read($, loadedRoot)
   if (!root) return
+  const at = await $.clock.now()
+  await update($, updatedAt, () => at)
+  await update($, now, () => at)
   const data: Saved = {
     purpose: await read($, purpose),
     intents: [...(await read($, intents))],
     drift: await read($, drift),
+    updatedAt: at,
   }
   if (data.intents.length === 0 && !data.purpose.ai && !data.purpose.mine) await $.store.delete(KEY + root)
   else await $.store.set(KEY + root, data)
@@ -270,7 +304,7 @@ async function checkDrift($: EngineInterface): Promise<void> {
   if (work.length === 0) return
 
   const answer = await $.model.complete({
-    model: 'haiku',
+    model: DRIFT_MODEL,
     maxTokens: 200,
     system:
       "You check whether an AI coding assistant's latest turn stayed on the goals a person set for this work. Reply with JSON only.",
@@ -295,6 +329,13 @@ export const register: Register = on => {
     await $.command.register({ name: 'intents', description: '打開本次目標面板' })
     await sweep($).catch(() => undefined)
     await sync($)
+    // "N 分鐘前" in the footer: the pane redraws once a minute (a reload
+    // cancels this timer and session.start starts a new one).
+    const at = await $.clock.now()
+    await update($, now, () => at)
+    $.clock.every(60_000, () => {
+      void $.clock.now().then(t => update($, now, () => t))
+    })
 
     return next(e)
   })
@@ -428,6 +469,19 @@ export const register: Register = on => {
     const off = await read($, drift)
     const edit = await read($, editing)
     const met = list.filter(one => one.isMet).length
+    const lastAt = await read($, updatedAt)
+    const nowMs = await read($, now)
+    const mainModel = modelName(await $.session.model().catch(() => '主對話的模型'))
+
+    // Metadata at the very bottom, below a divider, in light text.
+    const footer = (
+      <Box flexDirection="column">
+        <Text dimColor>{'─'.repeat(Math.max(8, Math.min(e.props.bodyColumns ?? 24, 60)))}</Text>
+        <Text dimColor wrap="wrap">最後更新：{lastAt === null ? '—' : ago(lastAt, Math.max(nowMs, lastAt))}</Text>
+        <Text dimColor wrap="wrap">摘要・打勾：{mainModel}（主對話）</Text>
+        <Text dimColor wrap="wrap">偏題檢查：{modelName(DRIFT_MODEL)}</Text>
+      </Box>
+    )
 
     const saveMine = (target: string) => (value: string) => {
       void (async () => {
@@ -494,9 +548,20 @@ export const register: Register = on => {
     }
     const clearTool: Tool = {
       key: 'clear',
-      icon: '✕',
+      icon: '⌫',
       text: '清空清單',
       onPress: () => update($, editing, () => 'confirm-clear'),
+    }
+    // A close at the bottom too: a host's own header may cover the pane's close mark.
+    const closeTool: Tool = {
+      key: 'close',
+      icon: '✕',
+      text: '關閉',
+      onPress: async () => {
+        // The mod's own close skips its own ui.close hook, so mark it here.
+        await update($, isClosedByPerson, () => true)
+        await $.ui.close({ id: PANE })
+      },
     }
 
     if (list.length === 0 && !p.ai) {
@@ -504,7 +569,8 @@ export const register: Register = on => {
         <Box flexDirection="column" gap={1}>
           <Text dimColor wrap="wrap">還沒有目標。開始描述這次要做的事，Claude 會在這裡整理出來。</Text>
           <Text dimColor wrap="wrap">對話已經進行一段了？按「▶ 開始整理」，Claude 會依目前的對話整理出原意和目標。</Text>
-          {toolbar([startTool])}
+          {toolbar([startTool, closeTool])}
+          {footer}
         </Box>
       )
     }
@@ -529,7 +595,7 @@ export const register: Register = on => {
           <Button key="clear-no" label="取消" onPress={() => update($, editing, () => null)} />
         </Box>
       ) : (
-        toolbar([refreshTool, clearTool])
+        toolbar([refreshTool, clearTool, closeTool])
       )
 
     return (
@@ -589,6 +655,7 @@ export const register: Register = on => {
         )}
 
         {clearRow}
+        {footer}
       </Box>
     )
   })

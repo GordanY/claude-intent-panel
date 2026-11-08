@@ -28,7 +28,7 @@ const SAVED = {
 }
 
 /** Panes the engine holds open, and how many times the mod opened one. */
-const ui = { up: new Set<string>(), opens: 0 }
+const ui = { up: new Set<string>(), opens: 0, clock: null as unknown as ReturnType<typeof mock.clock> }
 
 /** The engine beneath the mod; `dirs` are the folders that exist. */
 function engine(on: On, initial: Record<string, unknown> = {}, dirs: string[] = [ROOT, '/repo/.claude/worktrees']) {
@@ -47,6 +47,8 @@ function engine(on: On, initial: Record<string, unknown> = {}, dirs: string[] = 
   on('command.register', () => ({ value: { command: 'intents' } }))
   ui.up.clear()
   ui.opens = 0
+  ui.clock = mock.clock(on, { now: 1_700_000_000_000 })
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('ui.open', (_, e) => {
     ui.up.add(e.id)
     ui.opens += 1
@@ -170,7 +172,7 @@ test('clearing takes two presses and removes the saved list', async ($, on) => {
 
 test('an off-list turn raises a drift warning that can be added to the list', async ($, on) => {
   const store = engine(on)
-  const clock = mock.clock(on)
+  const clock = ui.clock
   on('session.messages', () => ({
     value: [
       { role: 'user', text: '幫我修草稿', toolUses: [] },
@@ -194,15 +196,15 @@ test('an off-list turn raises a drift warning that can be added to the list', as
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
   await clock.settle()
 
-  let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /偏題/ }))?.text).toBe('⚠️ 偏題：改了 CI 的等待時間')
-  await ui.press({ key: 'drift-add' })
-  await ui.unmount()
+  let view = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await view.find({ type: 'Text', text: /⚠️ 偏題/ }))?.text).toBe('⚠️ 偏題：改了 CI 的等待時間')
+  await view.press({ key: 'drift-add' })
+  await view.unmount()
 
-  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /偏題/ })).toBeUndefined()
-  expect((await ui.find({ type: 'Text', text: /已達成/ }))?.text).toBe('已達成 0/3')
-  await ui.unmount()
+  view = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await view.find({ type: 'Text', text: /⚠️ 偏題/ })).toBeUndefined()
+  expect((await view.find({ type: 'Text', text: /已達成/ }))?.text).toBe('已達成 0/3')
+  await view.unmount()
 })
 
 test('a pane the person closed is not reopened by list changes, only by /intents', async ($, on) => {
@@ -285,14 +287,16 @@ test('the bottom toolbar shows icon + text when wide and icon alone when narrow'
   engine(on)
   await seed($)
 
-  const wide = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const wide = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 60 }, surface: 'terminal' })
   expect((await wide.find({ type: 'Button', key: 'refresh-ai' }))?.text).toBe('↻ 重新整理 AI 內容')
-  expect((await wide.find({ type: 'Button', key: 'clear' }))?.text).toBe('✕ 清空清單')
+  expect((await wide.find({ type: 'Button', key: 'clear' }))?.text).toBe('⌫ 清空清單')
+  expect((await wide.find({ type: 'Button', key: 'close' }))?.text).toBe('✕ 關閉')
   await wide.unmount()
 
   const narrow = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 20 }, surface: 'terminal' })
   expect((await narrow.find({ type: 'Button', key: 'refresh-ai' }))?.text).toBe('↻')
-  expect((await narrow.find({ type: 'Button', key: 'clear' }))?.text).toBe('✕')
+  expect((await narrow.find({ type: 'Button', key: 'clear' }))?.text).toBe('⌫')
+  expect((await narrow.find({ type: 'Button', key: 'close' }))?.text).toBe('✕')
   await narrow.unmount()
 })
 
@@ -305,4 +309,45 @@ test('intent_list reads the list without changing it or raising an error', async
   expect('deny' in listed && listed.deny !== undefined).toBe(false)
   expect(JSON.stringify(listed)).toContain('關掉 app 後草稿要保留')
   expect(JSON.stringify(store.get(`wt:${ROOT}`))).toBe(before)
+})
+
+test('the footer shows when the list last changed and which models do the work', async ($, on) => {
+  engine(on)
+  await seed($)
+
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Text', text: /最後更新/ }))?.text).toBe('最後更新：剛剛')
+  expect((await pane.find({ type: 'Text', text: /摘要・打勾/ }))?.text).toBe('摘要・打勾：Opus 5.5（主對話）')
+  expect((await pane.find({ type: 'Text', text: /偏題檢查/ }))?.text).toBe('偏題檢查：Haiku')
+  expect((await pane.find({ type: 'Text', text: /^─+$/ }))).toBeDefined()
+  await pane.unmount()
+
+  await ui.clock.advance(10 * 60_000)
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Text', text: /最後更新/ }))?.text).toBe('最後更新：10 分鐘前')
+  await pane.unmount()
+
+  await $.tool.call({ tool: MET, id: '1', evidence: '通過' } as never)
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Text', text: /最後更新/ }))?.text).toBe('最後更新：剛剛')
+  await pane.unmount()
+})
+
+test('the bottom close button closes the pane and keeps it closed until /intents', async ($, on) => {
+  engine(on)
+  await seed($)
+  expect(ui.up.has('intents')).toBe(true)
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'close' })
+  await pane.unmount()
+  expect(ui.up.has('intents')).toBe(false)
+
+  const before = ui.opens
+  await $.tool.call({ tool: MET, id: '1', evidence: '通過' } as never)
+  expect(ui.opens).toBe(before)
+  expect(ui.up.has('intents')).toBe(false)
+
+  await $.command.run({ command: 'intents', args: '' } as never)
+  expect(ui.up.has('intents')).toBe(true)
 })
