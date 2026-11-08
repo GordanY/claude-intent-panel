@@ -75,6 +75,8 @@ export type Intent = {
   /** Planned phases of v0.12 (no longer used; kept so older lists load). */
   phases?: Phase[]
   phase?: string
+  /** A part's letter under its request ("b" in "1b"), given once and never reused. */
+  letter?: string
   /** Being worked on now, by Claude or a subagent sent for it; any number at once. */
   isActive?: boolean
   /** Words of the description of the subagent sent for this part; links its activity here. */
@@ -126,7 +128,7 @@ declare module 'claude-code' {
        * Work still running beside the main loop and not shown on a part:
        * background commands ("cmd:<task id>") and subagents ("agent:<id>").
        */
-      background: Record<string, { label: string; stage: StageKey; at: number; path?: string; lastOutputAt?: number }>
+      background: Record<string, { label: string; stage: StageKey; at: number; path?: string; lastOutputAt?: number; misses?: number }>
       /** Running subagents linked to a part: agent id → part id. */
       agentLinks: Record<string, string>
       /** Subagents started in this session, by id: their description (to link them later). */
@@ -137,6 +139,10 @@ declare module 'claude-code' {
       observed: number
       /** Changes Claude made to parts this turn, told to the person in one notice at its end. */
       notes: string[]
+      /** The saved copy this session last read or wrote: the base a three-way merge compares both sides with. */
+      baseline: { purpose: Purpose; intents: Intent[]; drift: Drift | null } | null
+      /** Whether the observer (a small model reading results and turns) may run; the person's choice, saved for every session. */
+      isObserverOn: boolean
       /** The person sent a message and Claude has not yet recorded it on the list (nor been reminded twice). */
       pendingRecord: boolean
       /** What the person typed in this session (prompts, mid-turn messages, dialog answers), newest last. */
