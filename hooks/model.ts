@@ -211,7 +211,7 @@ function line(list: readonly Intent[], one: Intent, isWithHistory: boolean): str
   const fields = [`${one.id}. [${role} · ${statusText(list, one)}] ${one.ai}`]
   if (one.agent) fields.push(`subagent: "${one.agent}"`)
   if (one.mine) fields.push(`person's words: ${one.mine}`)
-  if (one.source && !one.parent) fields.push(`source: "${one.source}"`)
+  if (one.source) fields.push(`${one.parent ? "person's follow-up" : 'source'}: "${one.source}"`)
   fields.push(`check: ${one.check || '(none)'}`)
   if (one.isMet && kindOf(one) === 'goal' && partsOf(list, one.id).length === 0) fields.push(`evidence: ${one.evidence}`)
   if (isWithHistory && one.history && one.history.length > 0) {

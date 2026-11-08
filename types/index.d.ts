@@ -62,8 +62,9 @@ export type Intent = {
   /** A goal (an outcome) or a limit (must not happen / must stay as it is). Absent: goal. */
   kind?: 'goal' | 'limit'
   /**
-   * A request (no parent): the person's own words that asked for it, checked
-   * against the conversation. A part (with parent) inherits its request's.
+   * The person's own words that asked for it, checked against the
+   * conversation: every request has them; a part has them when it is the
+   * person's follow-up to that request (Claude's own breakdown has none).
    */
   source?: string
   /** A part of this request: Claude's breakdown of what the person asked into plain outcomes. */
@@ -136,6 +137,8 @@ declare module 'claude-code' {
       observed: number
       /** Changes Claude made to parts this turn, told to the person in one notice at its end. */
       notes: string[]
+      /** The person sent a message and Claude has not yet recorded it on the list (nor been reminded twice). */
+      pendingRecord: boolean
       /** What the person typed in this session (prompts, mid-turn messages, dialog answers), newest last. */
       heardSaid: { text: string; at: number }[]
       /** The item whose details (source, history) are shown; one at a time. */

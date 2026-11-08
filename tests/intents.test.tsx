@@ -173,7 +173,9 @@ test("the person's own words show and reach the model once", async ($, on) => {
   const first = await $.prompt.submit({ text: '繼續' })
   expect('context' in first && first.context?.some(c => c.includes('草稿絕對不能不見'))).toBe(true)
   const second = await $.prompt.submit({ text: '再繼續' })
-  expect('context' in second && (second.context ?? []).length).toBe(0)
+  // The list rides once; every message carries only the short "record it first" reminder.
+  expect('context' in second && (second.context ?? []).some(c => c.includes('草稿絕對不能不見'))).toBe(false)
+  expect('context' in second && (second.context ?? []).length).toBe(1)
 })
 
 test('a resumed session shows the list saved for its worktree and tells the model', async ($, on) => {
@@ -1411,4 +1413,64 @@ test('the progress bar fills the pane width on the terminal', async ($, on) => {
   // 50 columns: 46 cells of bar, a space, "1/2".
   expect(bar).toBe(`${'▓'.repeat(23)}${'░'.repeat(23)} 1/2`)
   await pane.unmount()
+})
+
+test("the person's message is recorded before the work: a reminder rides with it, and a second one if Claude starts working first", async ($, on) => {
+  engine(on)
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  await seed($)
+
+  const sent = await $.prompt.submit({ text: '把進度條改成全寬' })
+  expect('context' in sent && sent.context?.some(c => c.includes('record it on the list first'))).toBe(true)
+  // Claude reads a file before recording anything: that first result carries the second reminder, once.
+  const first = await $.tool.call({ tool: 'Read', file_path: 'a.ts' } as never)
+  expect('context' in first && first.context?.some(c => c.includes('You started working without recording'))).toBe(true)
+  const again = await $.tool.call({ tool: 'Read', file_path: 'b.ts' } as never)
+  expect('context' in again && (again.context ?? []).some(c => c.includes('You started working without recording'))).toBe(false)
+
+  // Recorded first: no second reminder.
+  await $.prompt.submit({ text: '再把顏色改淡' })
+  await $.tool.call({ tool: REVISE, id: '1', check: 'DraftPersistTests 3/3' } as never)
+  const work = await $.tool.call({ tool: 'Edit', file_path: 'a.ts', old_string: 'a', new_string: 'b' } as never)
+  expect('context' in work && (work.context ?? []).some(c => c.includes('You started working without recording'))).toBe(false)
+})
+
+test("a small follow-up to a request goes under it with the person's words, and the request opens again", async ($, on) => {
+  const store = engine(on)
+  await seed($)
+  await $.tool.call({ tool: MET, id: '1', evidence: '3/3' } as never)
+  ui.messages = [...ui.messages, { role: 'user', text: '草稿也要在當機後保留', toolUses: [] }]
+
+  const invented = await $.tool.call({ tool: ADD, intents: [{ summary: 'x', check: 'x', parent: '1', source: '順便加快' }] } as never)
+  expect('deny' in invented).toBe(true)
+  await $.tool.call({ tool: ADD, intents: [{ summary: '當機後草稿還在', check: 'CrashTests', parent: '1', source: '草稿也要在當機後保留' }] } as never)
+
+  const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
+  expect(saved.intents.find(one => one.id === '3')).toMatchObject({ parent: '1', source: '草稿也要在當機後保留' })
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const shown = await texts(pane)
+  // Request 1 is open again: its follow-up is not done.
+  expect(shown).toContain('○ 1. 關掉 app 後草稿要保留 0/1')
+  expect(shown).toContain('  ○ 1a. 當機後草稿還在')
+  await pane.unmount()
+})
+
+test("the observer files a person's small follow-up under the request it refines", async ($, on) => {
+  const store = engine(on)
+  on('ui.toast', () => ({ value: undefined }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({
+    value: {
+      isAnswered: true,
+      text: JSON.stringify({ onTrack: true, add: [{ quote: '草稿也要在當機後保留', kind: 'goal', parent: '1', summary: '當機後草稿還在', check: 'CrashTests' }] }),
+      usage: USAGE,
+    },
+  }))
+  await seed($)
+  setMessages(() => ({ value: [{ role: 'user', text: '草稿也要在當機後保留', toolUses: [] }, { role: 'assistant', text: '好', toolUses: [] }] }))
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+  const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
+  expect(saved.intents.find(one => one.ai === '當機後草稿還在')).toMatchObject({ parent: '1', isAuto: true, source: '草稿也要在當機後保留' })
 })
