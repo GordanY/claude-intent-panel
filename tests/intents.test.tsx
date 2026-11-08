@@ -2776,3 +2776,25 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await pane.unmount()
   })
 }
+
+test('on desktop each divider is a visible full-width line', async ($, on) => {
+  engine(on)
+  await seed($)
+  await $.tool.call({ tool: MET, id: '2', evidence: 'git diff 不含 Sync/' } as never)
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const rules = (await pane.findAll({ type: 'Svg' })).filter(one => one.props.height === 1)
+  // One before the goals, before what is done, before the tools, before the footer.
+  expect(rules.length).toBe(4)
+  for (const rule of rules) {
+    const source = String(rule.props.source)
+    // A real line: drawn at three-quarters strength, not a near-invisible tint.
+    expect(Number(source.match(/fill-opacity="([0-9.]+)"/)?.[1])).toBeGreaterThanOrEqual(0.5)
+  }
+  // Each stretched across the pane.
+  const holders = (await pane.findAll({ type: 'Box' })).filter(box => box.key?.startsWith('div-'))
+  expect(holders.length).toBe(4)
+  for (const box of holders) {
+    expect(box.props.width).toBe('100%')
+  }
+  await pane.unmount()
+})

@@ -510,10 +510,17 @@ function resultNote(list: readonly Intent[]): string | null {
 
 const TOOLBAR_GAP = 2
 
-/** A hairline as wide as its slot, mid-grey at partial opacity so it reads on light and dark. */
-const RULE_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1" viewBox="0 0 2000 1" preserveAspectRatio="none">' +
-  '<rect width="2000" height="1" fill="#808080" fill-opacity="0.35"/></svg>'
+/**
+ * A hairline as wide as its slot. Its shade follows the scheme: on the surface's own colors (auto) a mid grey
+ * strong enough to show on light and dark alike; on a painted background a tint of its text color.
+ */
+function ruleSvg(colors: Scheme): string {
+  const [fill, opacity] = colors === 'dark' ? ['#ffffff', '0.28'] : colors === 'light' ? ['#000000', '0.2'] : ['#8a8a8a', '0.75']
+  return (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1" viewBox="0 0 2000 1" preserveAspectRatio="none">' +
+    `<rect width="2000" height="1" fill="${fill}" fill-opacity="${opacity}"/></svg>`
+  )
+}
 
 /** A progress bar as wide as its slot: a light track and the done share over it. */
 function progressSvg(share: number, fill = PALETTES.auto.bar): string {
@@ -1820,7 +1827,8 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const table = $.ui.resolve(e)
     const { Box, Input } = table
-    const pal = PALETTES[await read($, scheme)]
+    const schemeNow = await read($, scheme)
+    const pal = PALETTES[schemeNow]
     // The pane is laid out in blocks on every surface: a header (purpose, progress, what runs now), each open
     // request a card, then what is done, the tools, and the footer (its settings on a line of their own).
     // Spacing uses step names, which each surface sizes its own way.
@@ -1845,7 +1853,10 @@ export const register: Register = on => {
           {'─'.repeat(Math.max(8, Math.min(e.props.bodyColumns ?? 40, 60)))}
         </Text>
       ) : (
-        <table.Svg key={key} source={RULE_SVG} alt="" height={1} />
+        // Stretched across the pane, so the line is as wide as the section it parts.
+        <Box key={key} width="100%">
+          <table.Svg key={`${key}-line`} source={ruleSvg(schemeNow)} alt="" height={1} />
+        </Box>
       )
     // Docked beside the transcript, the pane fills its room: the tools and settings sit at its bottom edge, and
     // only when the list is taller than the room do they move down with it (the end of the scroll). Seated inline
