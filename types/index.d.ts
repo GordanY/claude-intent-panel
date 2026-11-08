@@ -143,7 +143,7 @@ declare module 'claude-code' {
        * Work still running beside the main loop and not shown on a part:
        * background commands ("cmd:<task id>") and subagents ("agent:<id>").
        */
-      background: Record<string, { label: string; stage: StageKey; at: number; path?: string; lastOutputAt?: number; endReadAt?: number; misses?: number }>
+      background: Record<string, { label: string; stage: StageKey; at: number; path?: string; lastOutputAt?: number; endReadAt?: number; misses?: number; owner?: string }>
       /** Running subagents linked to a part: agent id → part id. */
       agentLinks: Record<string, string>
       /** Subagents started in this session, by id: their description (to link them later). */

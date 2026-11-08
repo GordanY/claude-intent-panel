@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, SessionMessage } from 'claude-code'
 
 import type { Actor, Drift, Intent, Purpose, Stage, StageKey } from '../types'
 import { ago, asLang, DEFAULT_LANG, langLabel, langName, strings } from './i18n'
@@ -166,10 +166,14 @@ async function remember($: EngineInterface, texts: readonly string[]): Promise<v
 
 /** Each active part's live activity, from the tool calls of whoever works on it. */
 const activity = atom({ plugin: 'intent-tracker', key: 'activity' } as const, {} as Record<string, StageKey>)
-/** Work still running beside the main loop, not shown on a part: background commands and subagents. */
+/**
+ * Work still running beside the main loop, not shown on a part: background commands and subagents.
+ * Keyed by task id ("cmd:<task id>", "agent:<agent id>"), never by label: two runs under one title are two rows,
+ * each leaving on its own end. `owner` is the subagent that started a command (absent: the main loop).
+ */
 const background = atom(
   { plugin: 'intent-tracker', key: 'background' } as const,
-  {} as Record<string, { label: string; stage: StageKey; at: number; path?: string; lastOutputAt?: number; endReadAt?: number }>,
+  {} as Record<string, { label: string; stage: StageKey; at: number; path?: string; lastOutputAt?: number; endReadAt?: number; owner?: string }>,
 )
 
 /** How long a background item may stay listed with no end seen. */
@@ -195,8 +199,12 @@ async function reconcile($: EngineInterface): Promise<void> {
       const agent = byId.get(id)
       return !agent || ENDED.includes(agent.status)
     }
+    // An ended subagent leaves, and so do the background commands it started: their notification goes to
+    // that subagent's own loop, never to the main conversation, so its end is the last word on them.
     await update($, background, b =>
-      Object.fromEntries(Object.entries(b).filter(([key]) => !key.startsWith('agent:') || !isOver(key.slice(6)))),
+      Object.fromEntries(
+        Object.entries(b).filter(([key, item]) => (key.startsWith('agent:') ? !isOver(key.slice(6)) : !(item.owner && isOver(item.owner)))),
+      ),
     )
     // Subagents that ended leave the spawned list too, so it does not grow without end.
     await update($, spawned, m => Object.fromEntries(Object.entries(m).filter(([id]) => !isOver(id))))
@@ -227,14 +235,25 @@ async function reconcile($: EngineInterface): Promise<void> {
   await update($, background, b => Object.fromEntries(Object.entries(b).filter(([, item]) => nowMs - item.at < BACKGROUND_TTL_MS)))
   const commands = Object.entries(await read($, background)).filter(([key, item]) => key.startsWith('cmd:') && item.path !== '')
   if (commands.length === 0) return
-  // Where each command writes: told to the model in its call's result ("Output is being written to: …").
-  let texts: string[] | null = null
+  // Where each command writes: told to the model in its call's result ("Output is being written to: …"),
+  // in the transcript of whoever started it (a subagent's command is in that subagent's, not the main one).
+  const texts = new Map<string, string[]>()
+  const toolTexts = async (owner: string | undefined): Promise<string[]> => {
+    const known = texts.get(owner ?? '')
+    if (known) return known
+    // A subagent's transcript the session cannot read answers { deny }: nothing to find there.
+    const found: unknown = owner ? await $.session.messages({ agentId: owner }).catch(() => []) : await $.session.messages().catch(() => [])
+    const messages: readonly SessionMessage[] = Array.isArray(found) ? found : []
+    const all = messages.flatMap(m => m.toolUses.map(use => use.text ?? ''))
+    texts.set(owner ?? '', all)
+    return all
+  }
   for (const [key, item] of commands) {
     let path = item.path
     if (!path) {
-      texts ??= (await $.session.messages().catch(() => [])).flatMap(m => m.toolUses.map(use => use.text ?? ''))
       const id = key.slice(4)
-      const line = texts.find(text => text.includes(id) && text.includes('Output is being written to'))
+      const ownTexts = await toolTexts(item.owner)
+      const line = ownTexts.find(text => text.includes(id) && text.includes('Output is being written to'))
       path = line?.match(/Output is being written to:\s*(\S+?\.output)/)?.[1]
       if (!path) {
         // Not found after a few looks: stop reading the transcript for it (its notification or the time limit ends it).
@@ -1363,7 +1382,9 @@ export const register: Register = on => {
     const origin = (e as { origin?: { kind?: string } }).origin?.kind
     const isTyped = !origin || ['composer', 'bridge', 'sdk', 'unclassified'].includes(origin)
     if (!e.isMeta && isTyped && !/^\s*(\(Goals pane\)|（目標面板）|（目標パネル）)/.test(e.text)) await remember($, [e.text])
-    if (e.isMeta) {
+    // A background task's notification arrives with origin "task-notification" and, as Claude Code stores
+    // it, without isMeta: told apart by its origin, not by isMeta alone.
+    if (e.isMeta || (origin === 'task-notification' && /<task-notification\b/.test(e.text))) {
       // A background task's (or subagent's) notification is a result arriving:
       // the open goals ride beside it, as they do beside a finished tool call.
       if (!/<task-notification\b/.test(e.text)) return next(e)
@@ -1743,7 +1764,9 @@ export const register: Register = on => {
       const at = await $.clock.now()
       const label = shortLabel(typeof call.description === 'string' && call.description ? call.description : command)
       const kind: StageKey = isTest ? 'test' : isVerify ? 'compile' : 'run'
-      await update($, background, b => ({ ...b, [`cmd:${taskId}`]: { label, stage: kind, at } }))
+      // One started by a subagent remembers it: its output path is in that subagent's transcript, and its end
+      // (its notification goes to that subagent alone) is at the latest that subagent's own end.
+      await update($, background, b => ({ ...b, [`cmd:${taskId}`]: { label, stage: kind, at, ...(agentId ? { owner: agentId } : {}) } }))
     }
     // Working before the person's message is on the list: remind once, beside this first result.
     const isPrep = ['AskUserQuestion', 'ToolSearch', 'TodoWrite', 'Skill'].includes(String(call.tool))
