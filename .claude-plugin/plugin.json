@@ -1,7 +1,7 @@
 {
   "name": "intent-tracker",
-  "version": "0.10.0",
-  "description": "A side pane that keeps the current worktree's purpose and goals in plain words, ticks each goal once its check passes, and flags turns that drift off the list.",
+  "version": "0.11.0",
+  "description": "A side pane that keeps the current worktree's requests (in your own words), their plain-language parts and limits, ticks each once its check passes, tracks cancels and changes of mind, and flags turns that drift off the list.",
   "author": {
     "name": "GordanY"
   },

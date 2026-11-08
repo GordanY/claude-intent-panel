@@ -1,21 +1,71 @@
+/** Who made a change: the person (pane or their words), Claude, or the end-of-turn check. */
+export type Actor = 'person' | 'claude' | 'auto'
+
+export type HistoryWhat =
+  | 'added'
+  | 'edited'
+  | 'met'
+  | 'reopened'
+  | 'confirmed'
+  | 'cancelled'
+  | 'replaced'
+  | 'restored'
+  | 'broken'
+  | 'holding'
+
+export type HistoryEntry = { at: number; by: Actor; what: HistoryWhat; note?: string }
+
+/** Why an item left the list: dropped, or replaced by another (the person changed what they want). */
+export type Closed = {
+  as: 'cancelled' | 'replaced'
+  reason: string
+  by: Actor
+  at: number
+  replacedBy?: string
+  /** Closed because its request was: restored with it. */
+  isCascade?: boolean
+  /** Applied by the end-of-turn check; not yet confirmed. */
+  isAuto?: boolean
+}
+
+/** A limit a result showed broken. */
+export type Broken = { evidence: string; at: number; isAuto?: boolean }
+
 export type Intent = {
   /** Short stable id the model refers to: "1", "2", ... */
   id: string
-  /** Claude's plain-language summary (Traditional Chinese). */
+  /** Claude's plain-language summary, in the pane's language. */
   ai: string
   /** The person's own words, typed in the pane; '' until they write some. */
   mine: string
-  /** The concrete check that proves the goal is met. */
+  /** The concrete check that proves the goal is met (for a limit: that it still holds). */
   check: string
   isMet: boolean
   /** What was run or observed when the check passed; '' while open. */
   evidence: string
   /**
-   * Ticked by the end-of-turn check (Haiku) from the turn's tool output, not
-   * yet confirmed by the main conversation. Absent on lists saved before 0.8.
+   * Ticked by the end-of-turn check from the turn's tool output, not yet
+   * confirmed by the main conversation.
    */
   isAuto?: boolean
+  /** A goal (an outcome) or a limit (must not happen / must stay as it is). Absent: goal. */
+  kind?: 'goal' | 'limit'
+  /**
+   * A request (no parent): the person's own words that asked for it, checked
+   * against the conversation. A part (with parent) inherits its request's.
+   */
+  source?: string
+  /** A part of this request: Claude's breakdown of what the person asked into plain outcomes. */
+  parent?: string
+  closed?: Closed
+  broken?: Broken
+  history?: HistoryEntry[]
 }
+
+/** Where the work is now: plan, investigate, build, test, fix (after a failed test), review. */
+export type StageKey = 'plan' | 'investigate' | 'build' | 'test' | 'fix' | 'review'
+
+export type Stage = { now: StageKey | null; seen: StageKey[]; at: number; isTestFailing: boolean }
 
 export type Purpose = { ai: string; mine: string }
 
@@ -47,6 +97,12 @@ declare module 'claude-code' {
       driftModel: string
       /** A person can see this session (not `-p`, not the SDK): the mod acts only then. */
       isActive: boolean
+      /** Where the work is now, from the session's own tool calls (this session only). */
+      stage: Shaped<Stage>
+      /** The item whose details (source, history) are shown; one at a time. */
+      shownDetails: string | null
+      /** The cancelled and replaced items are expanded in the pane. */
+      isClosedOpen: boolean
       /** The finished goals are expanded in the pane. */
       isDoneOpen: boolean
     }

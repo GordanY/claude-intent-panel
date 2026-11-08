@@ -1,9 +1,30 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Drift, Intent, Purpose } from '../types'
+import type { Actor, Drift, Intent, Purpose, Stage } from '../types'
 import { ago, asLang, DEFAULT_LANG, langLabel, langName, strings } from './i18n'
 import type { Lang } from './i18n'
+import {
+  close,
+  entry,
+  isDone,
+  isLive,
+  isRequest,
+  kindOf,
+  listText,
+  nextId,
+  normalize,
+  partsOf,
+  personTexts,
+  progress,
+  advance,
+  NO_STAGE,
+  restore,
+  said,
+  stageOf,
+  units,
+  withHistory,
+} from './model'
 
 // A list belongs to a worktree (the session's project root), not to one CLI
 // process: it is saved in $.store under `wt:<root>`, so quitting the CLI and
@@ -43,6 +64,12 @@ const driftModel = atom({ plugin: 'intent-tracker', key: 'driftModel' } as const
  * (no instructions, no tools, no drift check).
  */
 const isActive = atom({ plugin: 'intent-tracker', key: 'isActive' } as const, true)
+/** Where the work is now, from this session's own tool calls. */
+const stage = atom({ plugin: 'intent-tracker', key: 'stage' } as const, NO_STAGE as Stage, { shape: 'stage-1' })
+/** The item whose details (source, history) the pane shows; one at a time. */
+const shownDetails = atom({ plugin: 'intent-tracker', key: 'shownDetails' } as const, null as string | null)
+/** Whether the cancelled and replaced items are expanded in the pane (folded by default). */
+const isClosedOpen = atom({ plugin: 'intent-tracker', key: 'isClosedOpen' } as const, false)
 /** Whether the finished goals are expanded in the pane (folded by default). */
 const isDoneOpen = atom({ plugin: 'intent-tracker', key: 'isDoneOpen' } as const, false)
 
@@ -52,6 +79,14 @@ function fromSubagent(e: unknown): boolean {
   return typeof agentId === 'string' && agentId !== ''
 }
 const SUBAGENT_DENY = 'Only the main conversation updates the intent pane; leave it to the main agent.'
+
+/** What the person themselves wrote: their prompts in this conversation and their words in the pane. */
+async function heard($: EngineInterface): Promise<string[]> {
+  const messages = await $.session.messages().catch(() => [])
+  const p = await read($, purpose)
+  const list = await read($, intents)
+  return personTexts(messages, [p.mine, ...list.map(one => one.mine)])
+}
 
 /**
  * The models the drift check may run on, cheapest first; the person picks one
@@ -79,13 +114,17 @@ const TOOLS = {
 type Saved = { purpose: Purpose; intents: Intent[]; drift: Drift | null; updatedAt?: number }
 
 const instructions = (language: string) => `# Intent pane (intent-tracker mod)
-A pane beside the chat shows the person, in plain ${language}, what the work in this worktree is for and which goals are met, so they do not get lost when the conversation turns technical. The list is kept per worktree across sessions. Keep it accurate and quiet (do not narrate these calls):
-- When the person states the task, or the task changes, call ${TOOL('intent_add')} with a one-line \`purpose\` and the goals. Each goal: \`summary\` is one plain ${language} sentence a non-programmer understands (no file names, SHAs, flags or jargon); \`check\` is the concrete step that proves it (a test that passes, a behaviour observed, a diff condition), in ${language}, identifiers allowed. Evidence is in ${language} too. Goals are outcomes the person wants, not your sub-steps: as many as the work really has, no fixed number. Do not re-add goals already on the list.
-- Call ${TOOL('intent_met')} only after a goal's check has actually been run or observed and passed, with the evidence. Never on intent, partial work or an unrun check. If later work breaks a met goal, call ${TOOL('intent_revise')} with reopen: true.
-- Keep the pane live: the moment a result arrives that runs a goal's check (a test or build, a subagent's report, a background task's notification), tick or reopen that goal in the same step, before you reply or move on. Such results carry an <intent-pane> note listing the open goals; act on it when it applies, ignore it when it does not.
-- After a turn, a small model may tick a goal from the turn's tool output; the list shows it as "met (auto, unconfirmed)". When you next see one, confirm it with ${TOOL('intent_met')} (your own evidence) or reopen it with ${TOOL('intent_revise')}.
-- To see the current list, call ${TOOL('intent_list')}; never call another intent tool just to read it.
-- The person may type their own words for the purpose or a goal; they reach you as context beside their prompt. Their words are the authority: when your summary or check diverges from them, revise yours to match, never the reverse.`
+A pane beside the chat shows the person, in plain ${language}, what they asked for in this worktree and how far it has got, so they do not get lost when the conversation turns technical. The list is kept per worktree across sessions. Keep it accurate and quiet (do not narrate these calls).
+What the list holds, in two layers:
+- REQUESTS: only what the person asked for, never your own ideas or technical tasks. A goal is an outcome they want; a limit is something they said must not happen or must stay as it is ("don't touch sync"); a limit is never ticked, it holds or is broken. Each request carries \`source\`: the person's own words that asked for it, quoted exactly from their message (or their pane text); the tool refuses words the person never said. Work you suggest joins only once they say yes; then quote their yes.
+- PARTS: break each goal request into the parts the person would recognise as pieces of what they asked: plain outcomes they can follow ("drafts survive closing the app", "sync still works"), never technical steps ("edit NoteStore.swift", "add a test"). Add them with \`parent\`: the request's id. A single request usually has several parts; progress counts parts, and a request is done when all its parts are. Revise the breakdown as you learn more (add parts, cancel ones that no longer apply).
+Adding: when the person states the task or adds to it, call ${TOOL('intent_add')} with a one-line \`purpose\` and the items. \`summary\`: one plain ${language} sentence a non-programmer understands (no file names, SHAs, flags or jargon); \`check\`: the concrete step that proves it (for a limit: how to see it still holds), identifiers allowed. Everything in ${language}. Never re-add an item already listed.
+Ticking: ${TOOL('intent_met')} only after a goal's (or part's) check actually ran and passed, with the evidence; never on intent, partial work or an unrun check. If later work breaks a met one, ${TOOL('intent_revise')} reopen: true. A limit a result shows broken: ${TOOL('intent_revise')} broken: "<evidence>"; once it holds again, holding: true.
+Changes of mind: when the person drops a request, ${TOOL('intent_revise')} cancel: "<their words>" (its parts close with it). When they change what they want, add the new request with \`replaces\`: "<old id>" and the new source; the old one stays on record as replaced, and a changed goal is verified afresh. A wording-only tweak: ${TOOL('intent_revise')} summary/check.
+Keep the pane live: results that run a check (a test or build, a subagent's report, a background task's notification) carry an <intent-pane> note; act on it in the same step, before you reply or move on; ignore it when it does not apply.
+After a turn, a small model may tick a goal, mark a limit broken, or record a request, a drop or a change of mind you missed; those show as "(auto, unconfirmed)". When you next see one, confirm it (${TOOL('intent_met')} for a tick, ${TOOL('intent_revise')} confirm: true otherwise) or undo it (reopen, restore: true, holding: true).
+To see the list, call ${TOOL('intent_list')}; never call another intent tool just to read it.
+The person's own pane words are the authority: when your summary or check diverges from them, revise yours to match, never the reverse.`
 
 const toolSpecs = [
   {
@@ -97,7 +136,7 @@ const toolSpecs = [
   {
     name: 'intent_add',
     description:
-      'Add goals to the intent pane (and optionally set the purpose). Use when the person states a task or the task changes.',
+      "Add the person's requests (quoting their words) or the parts of a request to the intent pane, and optionally set the purpose. Use when the person states a task, adds to it or changes it.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -111,7 +150,18 @@ const toolSpecs = [
             type: 'object',
             properties: {
               summary: { type: 'string', description: "Plain sentence in the pane's language, no jargon." },
-              check: { type: 'string', description: 'The concrete verification step that proves it.' },
+              check: { type: 'string', description: 'The concrete verification step that proves it (a limit: that it still holds).' },
+              kind: { type: 'string', enum: ['goal', 'limit'], description: 'A request only: goal (default) or limit.' },
+              source: {
+                type: 'string',
+                description:
+                  "A request (no parent): the person's own words that asked for it, quoted exactly from their message. Not needed for a part.",
+              },
+              parent: { type: 'string', description: "A part: the id of the goal request it is a piece of." },
+              replaces: {
+                type: 'string',
+                description: 'A request that replaces an earlier one because the person changed what they want: that id.',
+              },
             },
             required: ['summary', 'check'],
           },
@@ -123,7 +173,7 @@ const toolSpecs = [
   },
   {
     name: 'intent_met',
-    description: "Tick a goal in the intent pane after its check actually ran and passed.",
+    description: "Tick a goal or part in the intent pane after its check actually ran and passed (a request with parts is ticked through its parts).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -140,36 +190,29 @@ const toolSpecs = [
   {
     name: 'intent_revise',
     description:
-      "Change the purpose line, or a goal's summary or check (e.g. to match the person's own words), or reopen a met goal whose check no longer holds. Never touches the person's own words.",
+      "Change the purpose line or an item: its wording, reopen a met one, cancel a request the person dropped (their words) or a part that no longer applies, restore a closed one, mark a limit broken or holding, or confirm an auto entry. Never touches the person's own words.",
     inputSchema: {
       type: 'object',
       properties: {
         purpose: { type: 'string', description: "New plain purpose line in the pane's language." },
-        id: { type: 'string', description: 'The goal to change; omit when changing only the purpose.' },
+        id: { type: 'string', description: 'The item to change; omit when changing only the purpose.' },
         summary: { type: 'string' },
         check: { type: 'string' },
-        reopen: { type: 'boolean' },
+        reopen: { type: 'boolean', description: 'A met goal or part whose check no longer holds.' },
+        cancel: {
+          type: 'string',
+          description:
+            "Close it. A request: the person's own words dropping it, quoted exactly (its parts close with it). A part: why it no longer applies.",
+        },
+        restore: { type: 'boolean', description: 'Bring back a cancelled or replaced item (with the parts that closed with it).' },
+        broken: { type: 'string', description: 'A limit: the evidence that it was broken.' },
+        holding: { type: 'boolean', description: 'A limit that holds again.' },
+        confirm: { type: 'boolean', description: 'Confirm an auto (unconfirmed) cancel, replace, broken or added entry.' },
       },
     },
     isDeferred: false,
   },
 ] as const
-
-function listText(p: Purpose, list: readonly Intent[]): string {
-  const met = list.filter(one => one.isMet).length
-  const lines = [`Purpose: ${p.ai || '(unset)'}${p.mine ? ` | person's words: ${p.mine}` : ''}`]
-  lines.push(`Goals met: ${met}/${list.length}`)
-  for (const one of list) {
-    lines.push(
-      `${one.id}. [${one.isMet ? (one.isAuto ? 'met (auto, unconfirmed)' : 'met') : 'open'}] ${one.ai}` +
-        (one.mine ? ` | person's words: ${one.mine}` : '') +
-        ` | check: ${one.check}` +
-        (one.isMet ? ` | evidence: ${one.evidence}` : ''),
-    )
-  }
-
-  return lines.join('\n')
-}
 
 /**
  * Bash commands whose output usually runs a goal's check: tests, builds,
@@ -177,6 +220,10 @@ function listText(p: Purpose, list: readonly Intent[]): string {
  */
 const VERIFY_COMMAND =
   /\b(test|tests|spec|build|lint|check|verify|validate|xcodebuild|pytest|jest|vitest|mocha|tsc|cargo|go\s+(test|vet|build)|make|gradle|mvn|swift\s+(test|build)|npm\s+(run|test)|pnpm|yarn|bun|rspec|rake|merge-check|gh\s+(pr|run)\s+(checks|view|watch))\b/i
+
+/** Of those, the ones that test or verify (the rest only build). */
+const TEST_COMMAND =
+  /\b(test|tests|spec|pytest|jest|vitest|mocha|rspec|lint|check|verify|validate|tsc|merge-check)\b|gh\s+(pr|run)\s+(checks|view|watch)/i
 
 /** Tools whose finished result is someone else's report: a subagent's, a workflow's, a background task's. */
 const REPORT_TOOLS = new Set(['Agent', 'Task', 'Workflow', 'TaskOutput'])
@@ -192,16 +239,21 @@ function isResult(e: Record<string, unknown>): boolean {
   return e.tool === 'Bash' && typeof e.command === 'string' && VERIFY_COMMAND.test(e.command)
 }
 
-/** The note beside a result: the open goals and what to do if the result settles one. */
+/** The note beside a result: what is still open, and what to do if the result settles one. */
 function resultNote(list: readonly Intent[]): string | null {
-  const open = list.filter(one => !one.isMet)
-  const auto = list.filter(one => one.isMet && one.isAuto)
-  if (open.length === 0 && auto.length === 0) return null
+  const open = units(list).filter(one => !one.isMet || one.isAuto)
+  const limits = list.filter(one => isLive(one) && kindOf(one) === 'limit')
+  if (open.length === 0 && limits.length === 0) return null
   const lines = ['<intent-pane>A result just arrived. If it runs one of these checks, update the pane now, before going on:']
-  for (const one of open) lines.push(`${one.id}. [open] ${one.mine || one.ai} | check: ${one.check || '(none)'}`)
-  for (const one of auto) lines.push(`${one.id}. [met (auto, unconfirmed)] ${one.mine || one.ai} | check: ${one.check || '(none)'}`)
+  for (const one of open) {
+    lines.push(`${one.id}. [${one.isMet ? 'met (auto, unconfirmed)' : 'open'}] ${one.mine || one.ai} | check: ${one.check || '(none)'}`)
+  }
+  for (const one of limits) {
+    lines.push(`${one.id}. [limit · ${one.broken ? 'BROKEN' : 'holding'}] ${one.mine || one.ai} | check: ${one.check || '(none)'}`)
+  }
   lines.push(
-    `Passed → ${TOOL('intent_met')} with the evidence. Broke a met goal → ${TOOL('intent_revise')} reopen: true. Unrelated → ignore this note.</intent-pane>`,
+    `Passed → ${TOOL('intent_met')} with the evidence. Broke a met one → ${TOOL('intent_revise')} reopen: true. ` +
+      `Shows a limit broken → ${TOOL('intent_revise')} broken: "<evidence>". Unrelated → ignore this note.</intent-pane>`,
   )
   return lines.join('\n')
 }
@@ -254,10 +306,9 @@ async function refreshTitle($: EngineInterface, isAsked = false): Promise<void> 
   if (isAsked) await update($, isClosedByPerson, () => false)
   const isUp = (await $.ui.panes()).some(pane => pane.id === PANE)
   if (!isUp && !isAsked && (await read($, isClosedByPerson))) return
-  const list = await read($, intents)
-  const met = list.filter(one => one.isMet).length
+  const { met, total } = progress(await read($, intents))
   const t = strings(await read($, lang))
-  const title = list.length === 0 ? t.title : `${t.title} ${met}/${list.length}`
+  const title = total === 0 ? t.title : `${t.title} ${met}/${total}`
   await $.ui.open({ id: PANE, title })
 }
 
@@ -343,22 +394,44 @@ async function sweep($: EngineInterface): Promise<void> {
   }
 }
 
-type Verdict = { isOnTrack: boolean; note: string; isByUser: boolean; met: { id: string; evidence: string }[] }
+type Quoted = { id: string; quote: string; summary: string; check: string; evidence: string; kind: 'goal' | 'limit' }
+
+type Verdict = {
+  isOnTrack: boolean
+  note: string
+  isByUser: boolean
+  met: Quoted[]
+  broken: Quoted[]
+  cancel: Quoted[]
+  replace: Quoted[]
+  add: Quoted[]
+}
 
 function parseVerdict(text: string): Verdict | null {
   const match = text.match(/\{[\s\S]*\}/)
   if (!match) return null
   try {
     const value = JSON.parse(match[0]) as Record<string, unknown>
-    const met = Array.isArray(value.met) ? (value.met as Record<string, unknown>[]) : []
+    const rows = (key: string): Quoted[] =>
+      (Array.isArray(value[key]) ? (value[key] as unknown[]) : [])
+        .filter((m): m is Record<string, unknown> => typeof m === 'object' && m !== null)
+        .map(m => ({
+          id: str(String(m.id ?? '')),
+          quote: str(m.quote),
+          summary: str(m.summary),
+          check: str(m.check),
+          evidence: str(m.evidence),
+          kind: m.kind === 'limit' ? ('limit' as const) : ('goal' as const),
+        }))
     return {
       isOnTrack: value.onTrack !== false,
       note: str(value.note),
       isByUser: value.byUser === true,
-      met: met
-        .filter(m => typeof m === 'object' && m !== null)
-        .map(m => ({ id: str(String(m.id ?? '')), evidence: str(m.evidence) }))
-        .filter(m => m.id && m.evidence),
+      met: rows('met').filter(m => m.id && m.evidence),
+      broken: rows('broken').filter(m => m.id && m.evidence),
+      cancel: rows('cancel').filter(m => m.id && m.quote),
+      replace: rows('replace').filter(m => m.id && m.quote && m.summary),
+      add: rows('add').filter(m => m.quote && m.summary),
     }
   } catch {
     return null
@@ -370,14 +443,16 @@ const OUTPUT_EACH = 1200
 const OUTPUT_ALL = 14000
 
 /**
- * After a turn: a small model reads the turn against the list. It flags
- * off-list work (drift), and ticks open goals whose check the turn's tool
- * output shows passing but the main conversation left unticked, marked auto
- * until the main conversation confirms them.
+ * After a turn: a small model reads the turn against the list and catches
+ * what the main conversation missed. It flags off-list work (drift); ticks
+ * goals the turn's tool output shows passing and marks limits it shows
+ * broken; and, from the person's latest message, records a request, a drop or
+ * a change of mind. Everything it applies is marked auto until the main
+ * conversation confirms it; every quote it gives is checked against the
+ * person's message.
  */
 async function checkTurn($: EngineInterface): Promise<void> {
   const list = await read($, intents)
-  if (list.length === 0) return
   const p = await read($, purpose)
 
   const messages = await $.session.messages()
@@ -391,15 +466,21 @@ async function checkTurn($: EngineInterface): Promise<void> {
   }
   const asked = messages[start]
   if (!asked) return
+  // A notification or the pane's own prompt is no word of the person's.
+  const personWords = personTexts([asked], [])
 
   const ask = asked.text.slice(0, 2000)
   const work: string[] = []
   const outputs: string[] = []
   let outputLength = 0
+  // Claude changed the list itself this turn: it read the person's message, so
+  // requests, drops and changes are left to it (no second copy in other words).
+  let isListedByClaude = false
   for (const m of messages.slice(start + 1)) {
     if (m.role !== 'assistant') continue
     if (m.text.trim()) work.push(`said: ${m.text.trim().slice(0, 600)}`)
     for (const use of m.toolUses) {
+      if (use.tool === TOOLS.add || use.tool === TOOLS.revise) isListedByClaude = true
       if (use.tool.startsWith(`mcp__${P}__`)) continue
       work.push(`${use.tool}: ${JSON.stringify(use.input).slice(0, 300)}`)
       const out = (use.text ?? '').trim()
@@ -411,28 +492,36 @@ async function checkTurn($: EngineInterface): Promise<void> {
       outputLength += entry.length
     }
   }
-  if (work.length === 0) return
+  if (work.length === 0 && personWords.length === 0) return
+  if (list.length === 0 && personWords.length === 0) return
 
   const language = langName(await read($, lang))
-  const open = list.filter(one => !one.isMet)
   const answer = await $.model.complete({
     model: await read($, driftModel),
-    maxTokens: 400,
+    maxTokens: 700,
     system:
-      "You check an AI coding assistant's latest turn against the goals a person set for this work. Reply with JSON only.",
+      "You check an AI coding assistant's latest turn against the list of what a person asked for. Reply with JSON only.",
     prompt:
-      `${listText(p, list)}\n\nThe person's latest message:\n${ask}\n\nWhat the assistant did this turn:\n${work.join('\n').slice(0, 8000)}\n\n` +
+      `${list.length > 0 ? listText(p, list) : 'The list is empty.'}\n\n` +
+      `The person's latest message${personWords.length === 0 ? ' (an automatic notification, not the person)' : ''}:\n${ask}\n\n` +
+      `What the assistant did this turn:\n${work.join('\n').slice(0, 8000) || '(nothing)'}\n\n` +
       (outputs.length > 0 ? `What the tools returned this turn (tails of long outputs):\n${outputs.join('\n')}\n\n` : '') +
-      'Two questions.\n' +
-      '1. Drift. Work that serves any goal counts as on track: investigation, setup, verification, fixing what blocks a goal, and answering a direct question about the goals. ' +
-      'Flag only work clearly unrelated to every goal and to the purpose.\n' +
-      '2. Missed ticks. For each OPEN goal, did a tool output above actually run that goal\'s check and show it passing? ' +
-      'Count it only when the output itself shows the pass (a passing test summary, a successful build line, a report stating the check passed); ' +
-      'never on a plan, a claim in what the assistant said, a partial run, or an output that shows failures. When unsure, leave it out.\n' +
-      'Reply with one JSON object: {"onTrack": true|false, "byUser": <true if the person\'s latest message itself asked for the off-list work>, ' +
+      'The list holds only what the person asked for: requests (a goal, or a limit: something that must not happen), and parts (pieces of a goal request). Answer each question; when unsure, leave it out.\n' +
+      '1. drift: work clearly unrelated to every item and to the purpose, that the person did not ask for. Investigation, setup, verification and fixing what blocks an item are on track.\n' +
+      "2. met: open goals or parts (not limits, not requests that have parts) whose check a tool output above actually ran and showed passing: a passing test summary, a successful build line, a report stating the check passed. Never on a plan, the assistant's claim, a partial run, or an output with failures.\n" +
+      '3. broken: live limits a tool output shows broken.\n' +
+      "4. From the person's latest message only (skip if it is a notification), and only what the list does not already show:\n" +
+      '   add: something they asked for that is no item yet: an outcome they want or a limit they set. Not a question, not thanks, not approval of a step already listed.\n' +
+      '   cancel: a request they dropped ("never mind X", "skip X").\n' +
+      '   replace: a request they changed into something else ("instead of X, do Y").\n' +
+      "   Each needs \"quote\": their exact words from that message.\n" +
+      'Reply with one JSON object, empty lists where nothing applies: {"onTrack": true|false, ' +
       `"note": "<when off track: one short plain sentence in ${language} naming the off-list work, no jargon>", ` +
-      `"met": [{"id": "<open goal id>", "evidence": "<one short line in ${language} naming the output that shows the pass, quoting its key line>"}]}` +
-      (open.length === 0 ? ' (No goal is open: "met" is [].)' : ''),
+      `"met": [{"id": "<id>", "evidence": "<one short line in ${language} naming the output that shows the pass, quoting its key line>"}], ` +
+      `"broken": [{"id": "<limit id>", "evidence": "<one short line in ${language}>"}], ` +
+      `"add": [{"quote": "<their exact words>", "kind": "goal"|"limit", "summary": "<one plain sentence in ${language}, no jargon>", "check": "<how to prove it, in ${language}>"}], ` +
+      '"cancel": [{"id": "<request id>", "quote": "<their exact words>"}], ' +
+      `"replace": [{"id": "<request id>", "quote": "<their exact words>", "summary": "<the new request, plain ${language}>", "check": "<how to prove it>"}]}`,
   })
   if (!answer.isAnswered) return
 
@@ -440,25 +529,78 @@ async function checkTurn($: EngineInterface): Promise<void> {
   if (!verdict) return
   // Read the shared copy first: another session may have changed it meanwhile.
   await sync($)
+  const t = strings(await read($, lang))
+  const at = await $.clock.now()
+  const done: string[] = []
   let isChanged = false
-  if (!verdict.isOnTrack && verdict.note) {
+  if (!verdict.isOnTrack && verdict.note && list.length > 0) {
     await update($, drift, () => ({ note: verdict.note, isByUser: verdict.isByUser }))
     isChanged = true
   }
-  // Only goals still open now: the main conversation may have ticked one meanwhile.
+
   const current = await read($, intents)
-  const ticks = verdict.met.filter(m => current.some(one => one.id === m.id && !one.isMet))
-  if (ticks.length > 0) {
-    await update($, intents, l =>
-      l.map(one => {
+  const byId = (id: string) => current.find(one => one.id === id)
+  const isHeard = (quote: string) => !isListedByClaude && said(personWords, quote)
+  const open = new Set(units(current).filter(one => !one.isMet).map(one => one.id))
+  const ticks = verdict.met.filter(m => open.has(m.id))
+  const breaks = verdict.broken.filter(m => {
+    const one = byId(m.id)
+    return one && isLive(one) && kindOf(one) === 'limit' && !one.broken
+  })
+  const cancels = verdict.cancel.filter(m => {
+    const one = byId(m.id)
+    return one && isLive(one) && isRequest(one) && isHeard(m.quote)
+  })
+  const replaces = verdict.replace.filter(m => {
+    const one = byId(m.id)
+    return one && isLive(one) && isRequest(one) && isHeard(m.quote) && !cancels.some(c => c.id === m.id)
+  })
+  // A request already on the list (by its source or its words) is not added twice.
+  const known = current.filter(one => isRequest(one)).flatMap(one => [one.source ?? '', one.ai, one.mine].map(normalize))
+  const adds = verdict.add.filter(m => {
+    const quote = normalize(m.quote)
+    return isHeard(m.quote) && !known.some(k => k && (k.includes(quote) || quote.includes(k)))
+  })
+
+  if (ticks.length + breaks.length + cancels.length + replaces.length + adds.length > 0) {
+    await update($, intents, l => {
+      let next = l.map(one => {
         const tick = ticks.find(m => m.id === one.id)
-        return tick && !one.isMet ? { ...one, isMet: true, evidence: tick.evidence, isAuto: true } : one
-      }),
-    )
-    // The main conversation reads the auto ticks beside the next prompt, to confirm or reopen.
+        if (tick) return withHistory({ ...one, isMet: true, evidence: tick.evidence, isAuto: true }, entry(at, 'auto', 'met', tick.evidence))
+        const brk = breaks.find(m => m.id === one.id)
+        if (brk) return withHistory({ ...one, broken: { evidence: brk.evidence, at, isAuto: true } }, entry(at, 'auto', 'broken', brk.evidence))
+        return one
+      })
+      for (const c of cancels) next = close(next, c.id, { as: 'cancelled', reason: c.quote, by: 'person', at, isAuto: true })
+      let n = nextId(next)
+      const fresh = (m: Quoted): Intent => ({
+        id: String(n++),
+        ai: m.summary,
+        mine: '',
+        check: m.check,
+        isMet: false,
+        evidence: '',
+        isAuto: true,
+        kind: m.kind,
+        source: m.quote,
+        history: [entry(at, 'auto', 'added', m.quote)],
+      })
+      for (const r of replaces) {
+        const added = fresh(r)
+        next = close([...next, added], r.id, { as: 'replaced', reason: r.quote, by: 'person', at, replacedBy: added.id, isAuto: true })
+      }
+      for (const a of adds) next = [...next, fresh(a)]
+      return next
+    })
+    if (ticks.length > 0) done.push(t.autoTicked(ticks.map(m => m.id)))
+    if (breaks.length > 0) done.push(t.autoBroken(breaks.map(m => m.id)))
+    if (cancels.length > 0) done.push(t.autoCancelled(cancels.map(m => m.id)))
+    if (replaces.length > 0) done.push(t.autoReplaced(replaces.map(m => m.id)))
+    if (adds.length > 0) done.push(t.autoAdded(adds.length))
+    // The main conversation reads the auto entries beside the next prompt, to confirm or undo.
     await update($, isDirty, () => true)
     isChanged = true
-    $.ui.toast(strings(await read($, lang)).toastAuto(ticks.map(m => m.id)))
+    $.ui.toast(t.toastAuto(done))
   }
   if (!isChanged) return
   await save($)
@@ -579,17 +721,76 @@ export const register: Register = on => {
     const args = e as unknown as Record<string, unknown>
     const given = Array.isArray(args.intents) ? (args.intents as Record<string, unknown>[]) : []
     const newPurpose = str(args.purpose)
+    const list = await read($, intents)
+    const items = given
+      .map(g => ({
+        summary: str(g.summary),
+        check: str(g.check),
+        kind: g.kind === 'limit' ? ('limit' as const) : ('goal' as const),
+        source: str(g.source),
+        parent: str(g.parent),
+        replaces: str(g.replaces),
+      }))
+      .filter(g => g.summary)
+    const first = nextId(list)
+    // "+N" names the Nth item of this same call, so a request and its parts go in together.
+    const parentOf = (ref: string) => (/^\+\d+$/.test(ref) ? String(first + Number(ref.slice(1)) - 1) : ref)
+    const texts = await heard($)
+    const problems: string[] = []
+    items.forEach((item, n) => {
+      const at = `item ${n + 1} ("${item.summary.slice(0, 40)}")`
+      if (item.parent) {
+        const id = parentOf(item.parent)
+        const fresh = items[Number(id) - first]
+        const request = list.find(one => one.id === id) ?? (fresh && !fresh.parent ? { kind: fresh.kind } : undefined)
+        const isLiveRequest = list.some(one => one.id === id && isLive(one) && isRequest(one)) || (fresh !== undefined && !fresh.parent)
+        if (!request || !isLiveRequest) problems.push(`${at}: parent "${item.parent}" is not a live request on the list.`)
+        else if ((request.kind ?? 'goal') === 'limit') problems.push(`${at}: a limit has no parts.`)
+        if (item.kind === 'limit') problems.push(`${at}: a part is always a goal; a limit is a request of its own, quoting the person.`)
+        if (item.replaces) problems.push(`${at}: replaces is for requests, not parts.`)
+        return
+      }
+      if (!item.source) {
+        problems.push(
+          `${at}: a request needs source, the person's own words that asked for it. If this is your own idea or a technical step, it does not go on the list (a step of a request is a part: give parent instead).`,
+        )
+      } else if (!said(texts, item.source)) {
+        problems.push(
+          `${at}: the person never said "${item.source}". Quote their words exactly as they wrote them (an ellipsis may join two pieces of one message).`,
+        )
+      }
+      if (item.replaces && !list.some(one => one.id === item.replaces && isLive(one) && isRequest(one))) {
+        problems.push(`${at}: replaces "${item.replaces}" is not a live request on the list.`)
+      }
+    })
+    if (problems.length > 0) {
+      return { deny: `Nothing was added.\n${problems.join('\n')}\n\n${listText(await read($, purpose), list)}` }
+    }
+
+    const at = await $.clock.now()
     if (newPurpose) await update($, purpose, p => ({ ...p, ai: newPurpose }))
-    await update($, intents, list => {
-      let n = list.reduce((max, one) => Math.max(max, Number(one.id) || 0), 0)
-      const added = given
-        .map(g => ({ ai: str(g.summary), check: str(g.check) }))
-        .filter(g => g.ai)
-        .map(g => {
-          n += 1
-          return { id: String(n), ai: g.ai, mine: '', check: g.check, isMet: false, evidence: '' }
-        })
-      return [...list, ...added]
+    await update($, intents, current => {
+      let next = [...current]
+      let n = nextId(current)
+      for (const item of items) {
+        const id = String(n)
+        n += 1
+        const added: Intent = {
+          id,
+          ai: item.summary,
+          mine: '',
+          check: item.check,
+          isMet: false,
+          evidence: '',
+          history: [entry(at, 'claude', 'added', item.parent ? undefined : item.source)],
+          ...(item.parent ? { parent: parentOf(item.parent) } : { kind: item.kind, source: item.source }),
+        }
+        next.push(added)
+        if (item.replaces) {
+          next = close(next, item.replaces, { as: 'replaced', reason: item.source, by: 'person', at, replacedBy: id })
+        }
+      }
+      return next
     })
     await save($)
     await refreshTitle($)
@@ -600,7 +801,7 @@ export const register: Register = on => {
   on('tool.call', { tool: 'mcp__intent-tracker__intent_list' }, async $ => {
     await sync($)
 
-    return { result: listText(await read($, purpose), await read($, intents)) }
+    return { result: listText(await read($, purpose), await read($, intents), true) }
   })
 
   on('tool.call', { tool: 'mcp__intent-tracker__intent_met' }, async ($, e) => {
@@ -610,9 +811,21 @@ export const register: Register = on => {
     const id = str(args.id)
     const evidence = str(args.evidence)
     const list = await read($, intents)
-    if (!list.some(one => one.id === id)) return { deny: `No goal with id "${id}".\n${listText(await read($, purpose), list)}` }
+    const one = list.find(item => item.id === id)
+    const p = await read($, purpose)
+    if (!one) return { deny: `No item with id "${id}".\n${listText(p, list)}` }
+    if (one.closed) return { deny: `Item ${id} is ${one.closed.as}; restore it first (intent_revise restore: true) if it applies again.` }
+    if (kindOf(one) === 'limit') return { deny: `Item ${id} is a limit: it is never ticked. It holds, or intent_revise broken: "<evidence>".` }
+    if (partsOf(list, id).length > 0) return { deny: `Request ${id} has parts: tick its parts; the request is done when all of them are.\n${listText(p, list)}` }
     if (!evidence) return { deny: 'evidence is required: name the check you ran and what it showed.' }
-    await update($, intents, l => l.map(one => (one.id === id ? { ...one, isMet: true, evidence, isAuto: false } : one)))
+    const at = await $.clock.now()
+    await update($, intents, l =>
+      l.map(item =>
+        item.id === id
+          ? withHistory({ ...item, isMet: true, evidence, isAuto: false }, entry(at, 'claude', item.isMet && item.isAuto ? 'confirmed' : 'met', evidence))
+          : item,
+      ),
+    )
     await save($)
     await refreshTitle($)
 
@@ -626,36 +839,93 @@ export const register: Register = on => {
     const id = str(args.id)
     const newPurpose = str(args.purpose)
     const list = await read($, intents)
-    if (!id && !newPurpose) return { deny: `Give a goal id, a purpose, or both.\n${listText(await read($, purpose), list)}` }
-    if (id && !list.some(one => one.id === id)) return { deny: `No goal with id "${id}".\n${listText(await read($, purpose), list)}` }
-    if (newPurpose) await update($, purpose, p => ({ ...p, ai: newPurpose }))
-    await update($, intents, l =>
-      l.map(one => {
-        if (one.id !== id) return one
-        const next = { ...one }
-        if (str(args.summary)) next.ai = str(args.summary)
-        if (str(args.check)) next.check = str(args.check)
-        if (args.reopen === true) {
-          next.isMet = false
-          next.evidence = ''
-          next.isAuto = false
+    const p = await read($, purpose)
+    if (!id && !newPurpose) return { deny: `Give an item id, a purpose, or both.\n${listText(p, list)}` }
+    const one = list.find(item => item.id === id)
+    if (id && !one) return { deny: `No item with id "${id}".\n${listText(p, list)}` }
+    const cancel = str(args.cancel)
+    const broken = str(args.broken)
+    if (one) {
+      if (one.closed && (cancel || broken || args.reopen === true || args.holding === true)) {
+        return { deny: `Item ${id} is ${one.closed.as}: restore it first (restore: true).` }
+      }
+      if (args.restore === true && !one.closed) return { deny: `Item ${id} is not closed.` }
+      if ((broken || args.holding === true) && kindOf(one) !== 'limit') return { deny: `Item ${id} is a goal; broken and holding are for limits.` }
+      if (args.reopen === true && kindOf(one) === 'limit') return { deny: `Item ${id} is a limit; use holding: true.` }
+      if (cancel && isRequest(one) && !said(await heard($), cancel)) {
+        return {
+          deny: `A request is cancelled only on the person's word: they never said "${cancel}". Quote their words exactly; if they did not drop it, leave it.`,
         }
+      }
+    }
+
+    const at = await $.clock.now()
+    if (newPurpose) await update($, purpose, old => ({ ...old, ai: newPurpose }))
+    if (one) {
+      await update($, intents, l => {
+        let next = l.map(item => {
+          if (item.id !== id) return item
+          let changed: Intent = { ...item }
+          const summary = str(args.summary)
+          const check = str(args.check)
+          if (summary && summary !== item.ai) {
+            changed = withHistory({ ...changed, ai: summary }, entry(at, 'claude', 'edited', `${item.ai} → ${summary}`))
+          }
+          if (check && check !== item.check) {
+            changed = withHistory({ ...changed, check }, entry(at, 'claude', 'edited', `${item.check} → ${check}`))
+          }
+          if (args.reopen === true) {
+            changed = withHistory({ ...changed, isMet: false, evidence: '', isAuto: false }, entry(at, 'claude', 'reopened'))
+          }
+          if (broken) changed = withHistory({ ...changed, broken: { evidence: broken, at } }, entry(at, 'claude', 'broken', broken))
+          if (args.holding === true) {
+            delete changed.broken
+            changed = withHistory(changed, entry(at, 'claude', 'holding'))
+          }
+          if (args.confirm === true) {
+            const wasAuto = changed.isAuto || changed.closed?.isAuto || changed.broken?.isAuto
+            changed = { ...changed, isAuto: false }
+            if (changed.closed) changed.closed = { ...changed.closed, isAuto: false }
+            if (changed.broken) changed.broken = { ...changed.broken, isAuto: false }
+            if (wasAuto) changed = withHistory(changed, entry(at, 'claude', 'confirmed'))
+          }
+          return changed
+        })
+        if (cancel && one && !one.closed) {
+          const by: Actor = isRequest(one) ? 'person' : 'claude'
+          next = close(next, id, { as: 'cancelled', reason: cancel, by, at })
+        }
+        if (args.restore === true) next = restore(next, id, at, 'claude')
         return next
-      }),
-    )
+      })
+    }
     await save($)
     await refreshTitle($)
 
     return { result: listText(await read($, purpose), await read($, intents)) }
   })
 
-  // A finished test, build or report reaches the model with the open goals
-  // beside it, so the pane is updated the moment the result arrives.
+  // Every main-loop call moves the stage line (plan, investigate, build, test,
+  // fix, review). A finished test, build or report also reaches the model
+  // with the open items beside it, so the pane is updated the moment the
+  // result arrives.
   on('tool.call', async ($, e, next) => {
     const call = e as unknown as Record<string, unknown>
-    if (String(call.tool).startsWith(`mcp__${P}__`) || fromSubagent(e) || !isResult(call)) return next(e)
+    if (String(call.tool).startsWith(`mcp__${P}__`) || fromSubagent(e) || !(await read($, isActive))) return next(e)
+    const command = typeof call.command === 'string' ? call.command : ''
+    const isVerify = call.tool === 'Bash' && VERIFY_COMMAND.test(command)
+    const isTest = isVerify && TEST_COMMAND.test(command)
+    const before = await read($, stage)
+    const step = isVerify && !isTest ? 'build' : stageOf(call, isTest, before.isTestFailing)
+    if (step) {
+      const at = await $.clock.now()
+      await update($, stage, old => advance(old, step, at))
+    }
+    if (!isResult(call)) return next(e)
     const done = await next(e)
-    if (!(await read($, isActive)) || 'deny' in done) return done
+    if ('deny' in done) return done
+    // A test run that failed turns the next edits into fixing; a passing one ends that.
+    if (isTest && call.run_in_background !== true) await update($, stage, old => ({ ...old, isTestFailing: done.isError === true }))
     await sync($)
     const note = resultNote(await read($, intents))
     if (!note) return done
@@ -699,9 +969,20 @@ export const register: Register = on => {
     const t = strings(chosen)
     const mainModel = modelName(await $.session.model().catch(() => t.mainSession))
     const columns = e.props.bodyColumns ?? 40
-    const open = list.filter(one => !one.isMet)
-    const done = list.filter(one => one.isMet)
-    const autoCount = done.filter(one => one.isAuto).length
+    const details = await read($, shownDetails)
+    const isClosedShown = await read($, isClosedOpen)
+    const where = await read($, stage)
+    const live = list.filter(isLive)
+    // Goal requests (and any part left without its request) lead; limits sit apart.
+    const requests = live.filter(one => kindOf(one) === 'goal' && (isRequest(one) || !live.some(r => r.id === one.parent)))
+    const openRequests = requests.filter(one => !isDone(list, one))
+    const doneRequests = requests.filter(one => isDone(list, one))
+    const limits = live.filter(one => isRequest(one) && kindOf(one) === 'limit')
+    // Closed: requests, and parts closed while their request stays.
+    const closedItems = list.filter(one => !isLive(one) && !(one.parent && list.find(r => r.id === one.parent)?.closed))
+    const counted = progress(list)
+    const autoCount = units(list).filter(one => one.isMet && one.isAuto).length
+    const quote = (text: string) => (chosen.code === 'zh' || chosen.code === 'ja' ? `「${text}」` : `"${text}"`)
 
     const choose = async (next: Lang) => {
       await update($, lang, () => next)
@@ -720,8 +1001,15 @@ export const register: Register = on => {
       void (async () => {
         const text = value.trim()
         await sync($)
+        const at = await $.clock.now()
         if (target === 'purpose') await update($, purpose, old => ({ ...old, mine: text }))
-        else await update($, intents, l => l.map(one => (one.id === target ? { ...one, mine: text } : one)))
+        else {
+          await update($, intents, l =>
+            l.map(one =>
+              one.id === target && one.mine !== text ? withHistory({ ...one, mine: text }, entry(at, 'person', 'edited', text)) : one,
+            ),
+          )
+        }
         await update($, editing, () => null)
         await update($, isDirty, () => true)
         await save($)
@@ -878,6 +1166,17 @@ export const register: Register = on => {
       </Box>
     )
 
+    /** A change the person makes in the pane: read the shared copy, change, save, tell Claude next prompt. */
+    const personDo = (change: (l: Intent[], at: number) => Intent[]) => async () => {
+      await sync($)
+      const at = await $.clock.now()
+      await update($, intents, l => change(l, at))
+      await update($, editing, () => null)
+      await update($, isDirty, () => true)
+      await save($)
+      await refreshTitle($)
+    }
+
     if (list.length === 0 && !p.ai) {
       return (
         <Box flexDirection="column" gap={1}>
@@ -909,14 +1208,26 @@ export const register: Register = on => {
       </Box>
     )
 
-    // Progress at a glance (the count is in the title too).
+    // Progress at a glance (the count is in the title too): parts count, a
+    // request with no parts counts as one.
     const barWidth = Math.max(6, Math.min(20, columns - 8))
-    const filled = list.length === 0 ? 0 : Math.round((done.length / list.length) * barWidth)
-    const progress = (
+    const filled = counted.total === 0 ? 0 : Math.round((counted.met / counted.total) * barWidth)
+    const progressBar = (
       <Text dimColor>
         {'▓'.repeat(filled)}
-        {'░'.repeat(barWidth - filled)} {done.length}/{list.length}
+        {'░'.repeat(barWidth - filled)} {counted.met}/{counted.total}
       </Text>
+    )
+
+    // Where the work is now, from the session's own calls: the trail, then the current stage.
+    const trail = where.seen.slice(0, -1).map(k => t.stage[k])
+    const stageLine = where.now && (
+      <Box flexDirection="row" flexWrap="wrap">
+        {trail.length > 0 && <Text dimColor>{`${trail.join(' › ')} › `}</Text>}
+        <Text bold color="cyan">
+          {t.stage[where.now]}
+        </Text>
+      </Box>
     )
 
     const driftBox = off && (
@@ -932,15 +1243,22 @@ export const register: Register = on => {
             key="drift-add"
             label={t.addToList}
             onPress={async () => {
-              await sync($)
-              await update($, intents, l => {
-                const n = l.reduce((max, one) => Math.max(max, Number(one.id) || 0), 0) + 1
-                return [...l, { id: String(n), ai: off.note, mine: '', check: '', isMet: false, evidence: '' }]
-              })
+              await personDo((l, at) => [
+                ...l,
+                {
+                  id: String(nextId(l)),
+                  ai: off.note,
+                  mine: '',
+                  check: '',
+                  isMet: false,
+                  evidence: '',
+                  kind: 'goal',
+                  source: '',
+                  history: [entry(at, 'person', 'added', t.addedInPane)],
+                },
+              ])()
               await update($, drift, () => null)
-              await update($, isDirty, () => true)
               await save($)
-              await refreshTitle($)
             }}
           />
           <Button
@@ -956,58 +1274,258 @@ export const register: Register = on => {
       </Box>
     )
 
-    // What is still open, in full: the goal, the person's words, the check.
-    const openGoals = open.map(one => (
-      <Box key={`goal-${one.id}`} flexDirection="column">
-        <Box flexDirection="row" gap={1}>
-          <Text bold wrap="wrap">
-            ○ {one.id}. {one.ai}
-          </Text>
-          {edit !== one.id && pencil(one.id)}
-        </Box>
-        {one.mine && edit !== one.id && (
-          <Text wrap="wrap">
-            {'  '}
-            {t.you}
-            {t.colon}
-            {one.mine}
-          </Text>
-        )}
-        {edit === one.id && mineField(one.id, one.mine)}
-        <Text dimColor wrap="wrap">
-          {'  '}
-          {t.check}
-          {t.colon}
-          {one.check || t.noCheck}
-        </Text>
+    /** ✎ (the person's words), ✕ (cancel) and ⋯ (where it came from, its history). */
+    const itemTools = (one: Intent) => (
+      <Box flexDirection="row" gap={1}>
+        {edit !== one.id && pencil(one.id)}
+        <Button key={`cancel-${one.id}`} label="✕" plain dimColor onPress={() => update($, editing, () => `cancel-${one.id}`)} />
+        <Button
+          key={`details-${one.id}`}
+          label={details === one.id ? '▾' : '⋯'}
+          plain
+          dimColor
+          onPress={() => update($, shownDetails, v => (v === one.id ? null : one.id))}
+        />
       </Box>
-    ))
+    )
 
-    // What is done, folded to one line; open it for each goal and its evidence.
-    const doneGroup = done.length > 0 && (
+    const cancelRow = (one: Intent) =>
+      edit === `cancel-${one.id}` && (
+        <Box flexDirection="row" gap={1}>
+          <Text color="red">{t.confirmCancelItem}</Text>
+          <Button
+            key={`cancel-yes-${one.id}`}
+            label={t.cancelYes}
+            onPress={personDo((l, at) => close(l, one.id, { as: 'cancelled', reason: t.cancelledInPane, by: 'person', at }))}
+          />
+          <Button key={`cancel-no-${one.id}`} label={t.keep} onPress={() => update($, editing, () => null)} />
+        </Box>
+      )
+
+    const detailsBlock = (one: Intent, indent: string) =>
+      details === one.id && (
+        <Box flexDirection="column">
+          {one.source && (
+            <Text dimColor wrap="wrap">
+              {indent}
+              {'  '}
+              {t.saidLabel}
+              {t.colon}
+              {quote(one.source)}
+            </Text>
+          )}
+          {one.isMet && one.evidence && (
+            <Text dimColor wrap="wrap">
+              {indent}
+              {'  '}
+              {t.evidence}
+              {t.colon}
+              {one.evidence}
+            </Text>
+          )}
+          {(one.history ?? []).length > 0 && (
+            <Text dimColor>
+              {indent}
+              {'  '}
+              {t.history}
+              {t.colon}
+            </Text>
+          )}
+          {(one.history ?? []).slice(-6).map((step, n) => (
+            <Box key={`history-${one.id}-${n}`}>
+              <Text dimColor wrap="wrap">
+                {indent}
+                {'    '}
+                {`${ago(t, step.at, Math.max(nowMs, step.at))} · ${t.actor[step.by]} · ${t.what[step.what]}${step.note ? `${t.colon}${step.note}` : ''}`}
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      )
+
+    /** An open goal request with its parts under it, or a part. */
+    const goalRow = (one: Intent, indent: string): JSX.Element => {
+      const parts = partsOf(list, one.id)
+      const metParts = parts.filter(part => part.isMet).length
+      const mark = one.isMet ? '✓' : metParts > 0 ? '◐' : '○'
+      const isAutoShown = one.isAuto === true
+      return (
+        <Box key={`goal-${one.id}`} flexDirection="column">
+          <Box flexDirection="row" gap={1}>
+            <Text
+              bold={!one.parent && !one.isMet}
+              color={one.isMet ? (isAutoShown ? 'yellow' : 'green') : isAutoShown ? 'yellow' : undefined}
+              wrap="wrap"
+            >
+              {indent}
+              {mark} {one.id}. {one.ai}
+              {parts.length > 0 ? ` ${metParts}/${parts.length}` : ''}
+              {isAutoShown ? t.paren(t.autoMark) : ''}
+            </Text>
+            {itemTools(one)}
+          </Box>
+          {one.mine && edit !== one.id && (
+            <Text wrap="wrap">
+              {indent}
+              {'  '}
+              {t.you}
+              {t.colon}
+              {one.mine}
+            </Text>
+          )}
+          {edit === one.id && mineField(one.id, one.mine)}
+          {!one.isMet && parts.length === 0 && (
+            <Text dimColor wrap="wrap">
+              {indent}
+              {'  '}
+              {t.check}
+              {t.colon}
+              {one.check || t.noCheck}
+            </Text>
+          )}
+          {cancelRow(one)}
+          {detailsBlock(one, indent)}
+          {parts.map(part => goalRow(part, `${indent}  `))}
+        </Box>
+      )
+    }
+
+    const limitsBlock = limits.length > 0 && (
+      <Box flexDirection="column">
+        <Text dimColor>{t.limits}</Text>
+        {limits.map(one => (
+          <Box key={`limit-${one.id}`} flexDirection="column">
+            <Box flexDirection="row" gap={1}>
+              <Text color={one.broken ? 'red' : one.isAuto ? 'yellow' : undefined} wrap="wrap">
+                {one.broken ? '✗' : '🛡'} {one.id}. {one.ai}
+                {one.broken?.isAuto || one.isAuto ? t.paren(t.autoMark) : ''}
+              </Text>
+              {itemTools(one)}
+            </Box>
+            {one.mine && edit !== one.id && (
+              <Text wrap="wrap">
+                {'  '}
+                {t.you}
+                {t.colon}
+                {one.mine}
+              </Text>
+            )}
+            {edit === one.id && mineField(one.id, one.mine)}
+            {one.broken ? (
+              <Text color="red" wrap="wrap">
+                {'  '}
+                {t.brokenLabel}
+                {t.colon}
+                {one.broken.evidence}
+              </Text>
+            ) : (
+              <Text dimColor wrap="wrap">
+                {'  '}
+                {t.holding} · {t.check}
+                {t.colon}
+                {one.check || t.noCheck}
+              </Text>
+            )}
+            {cancelRow(one)}
+            {detailsBlock(one, '')}
+          </Box>
+        ))}
+      </Box>
+    )
+
+    // What is done, folded to one line; open it for each request, its parts and the evidence.
+    const doneGroup = doneRequests.length > 0 && (
       <Box flexDirection="column">
         <Button
           key="done-toggle"
-          label={`✓ ${t.doneGroup(done.length)}${autoCount > 0 ? t.paren(t.autoCount(autoCount)) : ''} ${isDoneShown ? '▾' : '▸'}`}
+          label={`✓ ${t.doneGroup(doneRequests.length)}${autoCount > 0 ? t.paren(t.autoCount(autoCount)) : ''} ${isDoneShown ? '▾' : '▸'}`}
           plain
           dimColor
           onPress={() => update($, isDoneOpen, v => !v)}
         />
         {isDoneShown &&
-          done.map(one => (
-            <Box key={`done-${one.id}`} flexDirection="column">
-              <Text color={one.isAuto ? 'yellow' : 'green'} wrap="wrap">
-                ✓ {one.id}. {one.mine || one.ai}
-                {one.isAuto ? t.paren(t.autoMark) : ''}
-              </Text>
-              <Text dimColor wrap="wrap">
-                {'  '}
-                {t.evidence}
-                {t.colon}
-                {one.evidence}
-              </Text>
-            </Box>
-          ))}
+          doneRequests.map(one => {
+            const parts = partsOf(list, one.id)
+            const isAutoShown = one.isAuto === true || parts.some(part => part.isAuto)
+            return (
+              <Box key={`done-${one.id}`} flexDirection="column">
+                <Box flexDirection="row" gap={1}>
+                  <Text color={isAutoShown ? 'yellow' : 'green'} wrap="wrap">
+                    ✓ {one.id}. {one.mine || one.ai}
+                    {isAutoShown ? t.paren(t.autoMark) : ''}
+                  </Text>
+                  <Button
+                    key={`details-${one.id}`}
+                    label={details === one.id ? '▾' : '⋯'}
+                    plain
+                    dimColor
+                    onPress={() => update($, shownDetails, v => (v === one.id ? null : one.id))}
+                  />
+                </Box>
+                {parts.length === 0 && (
+                  <Text dimColor wrap="wrap">
+                    {'  '}
+                    {t.evidence}
+                    {t.colon}
+                    {one.evidence}
+                  </Text>
+                )}
+                {parts.map(part => (
+                  <Box key={`done-part-${part.id}`}>
+                    <Text color={part.isAuto ? 'yellow' : undefined} dimColor={!part.isAuto} wrap="wrap">
+                      {'  '}✓ {part.id}. {part.mine || part.ai}
+                      {part.isAuto ? t.paren(t.autoMark) : ''}
+                    </Text>
+                  </Box>
+                ))}
+                {details === one.id && detailsBlock({ ...one, evidence: '' }, '')}
+              </Box>
+            )
+          })}
+      </Box>
+    )
+
+    // Cancelled and replaced: folded, each with why, and ↺ to bring it back.
+    const closedGroup = closedItems.length > 0 && (
+      <Box flexDirection="column">
+        <Button
+          key="closed-toggle"
+          label={`⊘ ${t.closedGroup(closedItems.length)} ${isClosedShown ? '▾' : '▸'}`}
+          plain
+          dimColor
+          onPress={() => update($, isClosedOpen, v => !v)}
+        />
+        {isClosedShown &&
+          closedItems.map(one => {
+            const how = one.closed
+            if (!how) return null
+            return (
+              <Box key={`closed-${one.id}`} flexDirection="column">
+                <Box flexDirection="row" gap={1}>
+                  <Text color={how.isAuto ? 'yellow' : undefined} dimColor={!how.isAuto} wrap="wrap">
+                    {how.as === 'replaced' ? '↷' : '⊘'} {one.id}. {one.mine || one.ai}
+                    {t.paren(how.as === 'replaced' ? t.replacedBy(how.replacedBy ?? '?') : t.cancelledLabel)}
+                    {how.isAuto ? t.paren(t.autoMark) : ''}
+                  </Text>
+                  <Button key={`restore-${one.id}`} label={t.restore} plain dimColor onPress={personDo((l, at) => restore(l, one.id, at, 'person'))} />
+                  <Button
+                    key={`details-${one.id}`}
+                    label={details === one.id ? '▾' : '⋯'}
+                    plain
+                    dimColor
+                    onPress={() => update($, shownDetails, v => (v === one.id ? null : one.id))}
+                  />
+                </Box>
+                <Text dimColor wrap="wrap">
+                  {'  '}
+                  {t.actor[how.by]}
+                  {t.colon}
+                  {how.by === 'person' && how.reason !== t.cancelledInPane ? quote(how.reason) : how.reason}
+                </Text>
+                {detailsBlock(one, '')}
+              </Box>
+            )
+          })}
       </Box>
     )
 
@@ -1038,11 +1556,14 @@ export const register: Register = on => {
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="column">
           {purposeBlock}
-          {list.length > 0 && progress}
+          {counted.total > 0 && progressBar}
+          {stageLine}
         </Box>
         {driftBox}
-        {openGoals}
+        {openRequests.map(one => goalRow(one, ''))}
+        {limitsBlock}
         {doneGroup}
+        {closedGroup}
         {clearRow}
         {footer}
       </Box>
