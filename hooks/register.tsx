@@ -2339,20 +2339,35 @@ export const register: Register = on => {
       head: string,
       body: string,
       look: { color?: string; bold?: boolean; dimColor?: boolean } = {},
-      isOneLine = false,
-    ) => (
-      <Box key={key} flexDirection="row" gap={1} flexGrow={1} flexShrink={1}>
-        {/* The head keeps its width: squeezed, "○ 34." would break over two lines. */}
-        <Box flexShrink={0} minWidth={cells(head)}>
-          <Text {...look}>{head}</Text>
+      onPress?: () => unknown,
+    ) => {
+      const headText = <Text {...look}>{head}</Text>
+      const bodyText = (
+        <Text {...look} wrap="wrap">
+          {body}
+        </Text>
+      )
+      // An item with parts: its words press like its > mark (both halves of the line, one press each).
+      const pressable = (part: 'head' | 'body', text: JSX.Element) =>
+        onPress ? (
+          <Button key={`${key}-${part}`} plain onPress={onPress}>
+            {text}
+          </Button>
+        ) : (
+          text
+        )
+      return (
+        <Box key={key} flexDirection="row" gap={1} flexGrow={1} flexShrink={1}>
+          {/* The head keeps its width: squeezed, "○ 34." would break over two lines. */}
+          <Box flexShrink={0} minWidth={cells(head)}>
+            {pressable('head', headText)}
+          </Box>
+          <Box flexGrow={1} flexShrink={1}>
+            {pressable('body', bodyText)}
+          </Box>
         </Box>
-        <Box flexGrow={1} flexShrink={1}>
-          <Text {...look} wrap={isOneLine ? 'truncate-end' : 'wrap'}>
-            {body}
-          </Text>
-        </Box>
-      </Box>
-    )
+      )
+    }
 
     const goalRow = (one: Intent, indent: string): JSX.Element => {
       const parts = partsOf(list, one.id)
@@ -2387,10 +2402,16 @@ export const register: Register = on => {
           <Box key={`row-${one.id}`} flexDirection="row" gap={1}>
             {foldButton(one)}
             <Box flexDirection="row" flexGrow={1} flexShrink={1} paddingLeft={cells(indent)}>
-              {hang(`line-${one.id}`, head, body, {
-                bold: !one.parent && !isFinished,
-                color: isFinished ? pal.done : isWorking ? pal.now : isDoubted || one.isStale || one.isAuto ? pal.warn : undefined,
-              })}
+              {hang(
+                `line-${one.id}`,
+                head,
+                body,
+                {
+                  bold: !one.parent && !isFinished,
+                  color: isFinished ? pal.done : isWorking ? pal.now : isDoubted || one.isStale || one.isAuto ? pal.warn : undefined,
+                },
+                parts.length > 0 ? () => toggleOpen(one.id) : undefined,
+              )}
             </Box>
             {itemTools(one)}
           </Box>
@@ -2464,6 +2485,7 @@ export const register: Register = on => {
                     `✓ ${one.id}.`,
                     `${one.mine || one.ai}${parts.length === 0 && doneTags(one).length > 0 ? t.paren(doneTags(one).join(' · ')) : ''}`,
                     { color: pal.done },
+                    parts.length > 0 ? () => toggleOpen(one.id) : undefined,
                   )}
                   <Button
                     key={`details-${one.id}`}

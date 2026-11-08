@@ -2750,3 +2750,29 @@ test('a background command quiet for ten minutes is drawn faded', async ($, on) 
   await ui.clock.settle()
   expect((await look()).dim).toBe(true)
 })
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`pressing an item's words folds and unfolds its parts, as > does (${surface})`, async ($, on) => {
+    engine(on)
+    await seed($)
+    await $.tool.call({ tool: ADD, intents: [{ summary: '當機後草稿還在', check: 'CrashDraftTests 通過', parent: '1' }, { summary: '切換後草稿還在', check: 'SwitchDraftTests 通過', parent: '1' }] } as never)
+    await $.tool.call({ tool: MET, id: '1a', evidence: 'CrashDraftTests 通過' } as never)
+    const pane = await $.ui.mount({ ...PANE, surface })
+    const showsDone = async () => (await texts(pane)).includes('✓ 1a. 當機後草稿還在')
+    expect(await showsDone()).toBe(false)
+    // The words open it…
+    await pane.press({ key: 'line-1-body' })
+    expect(await showsDone()).toBe(true)
+    expect((await pane.find({ type: 'Button', key: 'fold-1' }))?.text).toBe('v')
+    // …the number closes it…
+    await pane.press({ key: 'line-1-head' })
+    expect(await showsDone()).toBe(false)
+    expect((await pane.find({ type: 'Button', key: 'fold-1' }))?.text).toBe('>')
+    // …and > still works.
+    await pane.press({ key: 'fold-1' })
+    expect(await showsDone()).toBe(true)
+    // An item with no parts has nothing to fold: its words are plain text.
+    expect(await pane.find({ type: 'Button', key: 'line-2-body' })).toBeUndefined()
+    await pane.unmount()
+  })
+}

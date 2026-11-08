@@ -33,7 +33,7 @@ drift Haiku  observer: on  🌐 English  ◐ dark
 
 | Mark | Meaning |
 |---|---|
-| `>` / `v` | the item has parts: press to show (`v`) or fold (`>`) its finished parts |
+| `>` / `v` | the item has parts: press it, or the item's words, to show (`v`) or fold (`>`) its finished parts |
 | `-` | the item has no parts |
 | ○ | not done, not being worked on |
 | ● | being worked on now (several at once is fine) |
