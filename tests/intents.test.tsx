@@ -779,7 +779,7 @@ test("after a turn, a goal its output shows passing is ticked and counted at onc
       value: {
         isAnswered: true,
         // "9" is no goal and "3" is unknown: both are dropped.
-        text: '{"onTrack": true, "met": [{"id": "1", "quote": "Executed 3 tests, with 0 failures", "evidence": "DraftPersistTests：3 個測試 0 失敗"}, {"id": "9", "quote": "Executed 3 tests, with 0 failures", "evidence": "x"}]}',
+        text: '{"onTrack": true, "met": [{"id": "1", "quote": "Test Suite DraftPersistTests passed", "evidence": "DraftPersistTests：3 個測試 0 失敗"}, {"id": "9", "quote": "Test Suite DraftPersistTests passed", "evidence": "x"}]}',
         usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
       },
     }
@@ -910,7 +910,7 @@ test('a request breaks into parts; progress counts the parts and the request is 
   expect(saved.intents.find(one => one.id === '1')?.source).toBe('修好草稿消失的問題')
 })
 
-test('a limit sits apart, is never ticked or counted, and shows when broken', async ($, on) => {
+test('a limit is never ticked or counted, stays out of sight while it holds, and shows as a red warning when broken', async ($, on) => {
   engine(on)
   await start($)
   await $.tool.call({
@@ -923,18 +923,19 @@ test('a limit sits apart, is never ticked or counted, and shows when broken', as
   const ticked = await $.tool.call({ tool: MET, id: '2', evidence: 'ok' } as never)
   expect('deny' in ticked && (ticked.deny ?? "").includes('limit')).toBe(true)
 
+  // While it holds, the rule is not shown at all (Claude still has it).
   let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   let shown = await texts(pane)
   expect(shown.some(x => x.endsWith(' 0/1') && /[▓░]/.test(x))).toBe(true)
-  expect(shown).toContain('過程中要遵守的限制')
-  expect(shown).toContain('🛡 2. 同步不受影響')
+  expect(shown.some(x => x.includes('同步不受影響') || x.includes('限制'))).toBe(false)
   await pane.unmount()
 
+  // Broken: a red warning appears, with what broke it, and a notice.
   await $.tool.call({ tool: REVISE, id: '2', broken: 'diff 動到 Sync/Engine.swift' } as never)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   shown = await texts(pane)
-  expect(shown).toContain('✗ 2. 同步不受影響')
-  expect(shown).toContain('  被破壞：diff 動到 Sync/Engine.swift')
+  expect(shown).toContain('✗ 規則被破壞：同步不受影響')
+  expect(shown).toContain('  diff 動到 Sync/Engine.swift')
   await pane.unmount()
 })
 
@@ -1727,7 +1728,7 @@ test("only the person's own writing counts: too-short quotes, fenced code, paste
     value: [
       {
         role: 'user',
-        text: '好的\n```\n// TODO fix the build pipeline\n```\n<pasted_content id="1">please add dark mode support</pasted_content>',
+        text: '好的，這樣做吧\n```\n// TODO fix the build pipeline\n```\n<pasted_content id="1">please add dark mode support</pasted_content>',
         toolUses: [],
       },
     ],
@@ -1883,4 +1884,46 @@ test('a result note lists the parts being worked on first, at most eight, with a
   expect(lines.length).toBe(8)
   expect(lines[0]).toBe('1k. [active] 分項 11 | check: 檢查 11')
   expect(note).toContain('(+3 more open: intent_list)')
+})
+
+test('a short reply counts only as a whole message; markdown emphasis does not block a quote', async ($, on) => {
+  engine(on)
+  await start($)
+  setMessages(() => ({ value: [{ role: 'user', text: 'pick 1', toolUses: [] }, { role: 'user', text: '**可以請主對話**把檢查方式寫成具體的測試名稱', toolUses: [] }] }))
+  const whole = await $.tool.call({ tool: ADD, intents: [{ summary: 'x', check: 'x', source: 'pick 1' }] } as never)
+  expect('deny' in whole).toBe(false)
+  const emphasis = await $.tool.call({ tool: ADD, intents: [{ summary: 'y', check: 'y', source: '可以請主對話把檢查方式寫成具體的測試名稱' }] } as never)
+  expect('deny' in emphasis).toBe(false)
+})
+
+test('the observer does not tick from a suite-wide summary line: the quoted line must name the item', async ($, on) => {
+  const store = engine(on)
+  on('ui.toast', () => ({ value: undefined }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({
+    value: {
+      isAnswered: true,
+      text: JSON.stringify({ onTrack: true, met: [{ id: '1', quote: '68 pass / 0 fail', evidence: '全部通過' }, { id: '2', quote: '(pass) SyncUntouchedTests', evidence: '同步沒動' }] }),
+      usage: USAGE,
+    },
+  }))
+  await start($)
+  await $.tool.call({
+    tool: ADD,
+    intents: [
+      { summary: '草稿要保留', check: '對應測試通過', source: '關掉 app 後草稿要保留' },
+      { summary: '同步照常', check: 'SyncUntouchedTests 通過', source: '不要動到同步' },
+    ],
+  } as never)
+  setMessages(() => ({
+    value: [
+      { role: 'user', text: '跑測試', toolUses: [] },
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 't', tool: 'Bash', input: { command: 'npm test' }, text: '(pass) SyncUntouchedTests\n68 pass / 0 fail' }] },
+    ],
+  }))
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+  const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
+  expect(saved.intents.find(one => one.id === '1')?.isMet).toBe(false)
+  expect(saved.intents.find(one => one.id === '2')?.isMet).toBe(true)
 })

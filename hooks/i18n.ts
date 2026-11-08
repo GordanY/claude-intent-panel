@@ -101,6 +101,8 @@ export type Strings = {
   autoReplaced: (ids: readonly string[]) => string
   autoAdded: (n: number) => string
   limits: string
+  ruleBroken: string
+  toastRuleBroken: (text: string) => string
   partsChanged: (what: 'added' | 'edited' | 'cancelled' | 'moved' | 'restored', ids: readonly string[]) => string
   toastTurn: (notes: readonly string[]) => string
   autoStale: (ids: readonly string[]) => string
@@ -186,6 +188,8 @@ const EN: Strings = {
   autoReplaced: ids => `replaced ${ids.join(', ')}`,
   autoAdded: n => `added ${n} request${n === 1 ? '' : 's'}`,
   limits: 'Rules to keep during the work',
+  ruleBroken: 'Rule broken',
+  toastRuleBroken: text => `Rule broken: ${text}`,
   partsChanged: (what, ids) =>
     `Claude ${{ added: 'added', edited: 'edited', cancelled: 'cancelled', moved: 'moved', restored: 'restored' }[what]} ${ids.map(x => `"${x}"`).join(', ')}`,
   toastTurn: notes => notes.join('; '),
@@ -288,6 +292,8 @@ const ZH: Strings = {
   autoReplaced: ids => `取代 ${ids.join('、')}`,
   autoAdded: n => `加入 ${n} 項需求`,
   limits: '過程中要遵守的限制',
+  ruleBroken: '規則被破壞',
+  toastRuleBroken: text => `規則被破壞：${text}`,
   partsChanged: (what, ids) =>
     `Claude ${{ added: '新增', edited: '修改', cancelled: '取消', moved: '移動', restored: '還原' }[what]}了「${ids.join('」「')}」`,
   toastTurn: notes => notes.join('；'),
@@ -392,6 +398,8 @@ const JA: Strings = {
   autoReplaced: ids => `${ids.join('、')} を置き換え`,
   autoAdded: n => `依頼を ${n} 件追加`,
   limits: '作業中に守るルール',
+  ruleBroken: 'ルールが破られた',
+  toastRuleBroken: text => `ルールが破られた：${text}`,
   partsChanged: (what, ids) =>
     `Claude が「${ids.join('」「')}」を${{ added: '追加', edited: '編集', cancelled: '取り消し', moved: '移動', restored: '復元' }[what]}しました`,
   toastTurn: notes => notes.join('；'),

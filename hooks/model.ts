@@ -182,7 +182,7 @@ export function ownWriting(text: string): string {
 export function normalize(text: string): string {
   return text
     .toLowerCase()
-    .replace(/[「」『』“”‘’"'`]/g, '')
+    .replace(/[「」『』“”‘’"'`*_]/g, '')
     .replace(/\s+/g, ' ')
     .replace(/^[\s.,!?;:。，！？；：、…]+|[\s.,!?;:。，！？；：、…]+$/g, '')
     .trim()
@@ -246,8 +246,10 @@ export function said(texts: readonly string[], quote: string): boolean {
     .split(/…|\.\.\./)
     .map(normalize)
     .filter(piece => piece.length > 0)
-  // Too short to tell apart ("ok", "好的"): never proof of what the person asked.
-  if (pieces.length === 0 || weight(pieces.join('')) < MIN_QUOTE) return false
+  if (pieces.length === 0) return false
+  // Too short to tell apart ("ok", "好的", "pick 1"): it counts only as a whole message of the person's,
+  // never as a piece of a longer one.
+  if (weight(pieces.join('')) < MIN_QUOTE) return pieces.length === 1 && texts.some(text => normalize(text) === pieces[0])
   return texts.some(text => {
     const plain = normalize(text)
     return pieces.every(piece => plain.includes(piece))
@@ -451,4 +453,25 @@ export function relevantOpen(list: readonly Intent[], max: number): { shown: Int
   const rest = open.filter(one => !active.includes(one) && !sameRequest.includes(one))
   const ranked = [...active, ...sameRequest, ...rest]
   return { shown: ranked.slice(0, max), more: Math.max(0, ranked.length - max) }
+}
+
+/** Words that name nothing in particular: a line made only of these names no item. */
+const GENERIC = new Set(
+  'test tests testing pass passed passes passing fail failed failure failures ok okay all done check checks build built run runs ran suite total error errors success successful the and with for of in to'.split(' '),
+)
+
+/**
+ * Whether a line names the item: shares a distinctive word with it (an
+ * identifier or word of four or more letters that is not generic, or a run
+ * of two or more CJK characters).
+ */
+export function mentions(line: string, about: string): boolean {
+  const said = normalize(line)
+  const latin = (about.toLowerCase().match(/[a-z][a-z0-9_.-]{3,}/g) ?? []).filter(w => !GENERIC.has(w))
+  if (latin.some(w => said.includes(w))) return true
+  const cjk = about.match(/[\u3400-\u9fff]{2,}/g) ?? []
+  return cjk.some(run => {
+    for (let n = 0; n + 2 <= run.length; n += 1) if (said.includes(run.slice(n, n + 2)) && !['測試', '通過', '檢查', '對應'].includes(run.slice(n, n + 2))) return true
+    return false
+  })
 }
