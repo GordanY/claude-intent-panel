@@ -2,7 +2,7 @@
 
 A Claude Code mod that keeps a side pane, **🎯 Goals**, showing in plain words what the current work is for and which goals are met, so a long, technical session never loses sight of its original intent.
 
-- **Purpose and goals**: Claude records a one-line purpose and 1–5 goals, each with a plain-language summary and the concrete check that proves it.
+- **Purpose and goals**: Claude records a one-line purpose and as many goals as the work really has, each with a plain-language summary and the concrete check that proves it.
 - **Your own words**: press ✎ beside the purpose or a goal to write it your way; it reaches Claude beside your next prompt and is treated as authoritative, and it leads where both are shown.
 - **Auto-tick with evidence**: Claude ticks a goal only after its check actually ran and passed, and records the evidence. A tick without evidence is refused.
 - **Drift warning**: after each turn a small model (Haiku) checks the turn against the list and flags off-list work, with *add to list* / *ignore* buttons.

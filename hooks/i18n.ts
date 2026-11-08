@@ -139,7 +139,7 @@ const EN: Strings = {
   colon: ': ',
   paren: text => ` (${text})`,
   startPrompt: (t, lang) =>
-    `(Goals pane) From the conversation so far, set out what this work is for and its goals: use ${t.add} to set a one-line plain-language purpose and 1–5 goals I actually want, each with a concrete check; tick goals already verified in the conversation with ${t.met} and the evidence. ` +
+    `(Goals pane) From the conversation so far, set out what this work is for and its goals: use ${t.add} to set a one-line plain-language purpose and the goals I actually want (as many as the work really has), each with a concrete check; tick goals already verified in the conversation with ${t.met} and the evidence. ` +
     `Use only what actually happened in the conversation; if it is not yet clear what we are doing, just ask me. Write everything in ${lang}. When done, tell me in a sentence or two.`,
   refreshPrompt: (t, lang) =>
     `(Goals pane) From the current conversation, refresh the AI content of the goals pane: the purpose and each goal's plain-language summary, check and tick state. ` +
@@ -193,7 +193,7 @@ const ZH: Strings = {
   paren: text => `（${text}）`,
   startPrompt: (t, lang) =>
     '（目標面板）請依目前為止的對話，整理這次工作的原意和目標：' +
-    `用 ${t.add} 設定一行白話的原意，和 1～5 個我真正想要的目標（每個附具體的檢查方式）；` +
+    `用 ${t.add} 設定一行白話的原意，和我真正想要的目標（有幾個就列幾個）（每個附具體的檢查方式）；` +
     `對話裡已經確實跑過、也通過檢查的目標，再用 ${t.met} 補上依據打勾。` +
     `只根據對話裡真的發生過的事；如果對話還看不出要做什麼，就直接問我。全部用${lang}寫。整理完用一兩句話告訴我。`,
   refreshPrompt: (t, lang) =>
@@ -248,7 +248,7 @@ const JA: Strings = {
   paren: text => `（${text}）`,
   startPrompt: (t, lang) =>
     '（目標パネル）これまでの会話から、この作業の目的と目標を整理してください：' +
-    `${t.add} で一行の平易な目的と、私が本当に望む目標を 1〜5 個（それぞれ具体的な確認方法つき）設定し、会話の中で実際に確認済みの目標は ${t.met} で根拠をつけてチェックしてください。` +
+    `${t.add} で一行の平易な目的と、私が本当に望む目標を数を決めずに必要なだけ（それぞれ具体的な確認方法つき）設定し、会話の中で実際に確認済みの目標は ${t.met} で根拠をつけてチェックしてください。` +
     `会話で実際に起きたことだけに基づき、まだ何をするか分からなければ私に聞いてください。すべて${lang}で書いてください。終わったら一、二文で教えてください。`,
   refreshPrompt: (t, lang) =>
     '（目標パネル）現在の会話に基づいて、目標パネルの AI 内容（目的、各目標の平易な要約、確認方法、チェック状態）を更新してください。' +

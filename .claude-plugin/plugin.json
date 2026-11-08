@@ -1,6 +1,6 @@
 {
   "name": "intent-tracker",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "A side pane that keeps the current worktree's purpose and goals in plain words, ticks each goal once its check passes, and flags turns that drift off the list.",
   "author": {
     "name": "GordanY"
