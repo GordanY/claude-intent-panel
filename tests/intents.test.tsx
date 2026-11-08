@@ -483,7 +483,7 @@ test('an interactive session gets the instructions; a teammate prompt or one wit
   on('prompt.compose', () => ({ sections: [] }))
   await start($)
 
-  expect(ui.registered).toBe(5)
+  expect(ui.registered).toBe(4)
   expect(JSON.stringify(await $.prompt.compose(COMPOSE as never))).toContain('Intent pane')
   expect(JSON.stringify(await $.prompt.compose({ ...COMPOSE, traits: ['teammate'] } as never))).not.toContain('Intent pane')
   expect(JSON.stringify(await $.prompt.compose({ ...COMPOSE, surfaces: [] } as never))).not.toContain('Intent pane')
@@ -607,7 +607,7 @@ test('a desktop-app session (SDK-hosted, no surface at start) turns on when the 
   expect(ui.registered).toBe(0)
 
   await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
-  expect(ui.registered).toBe(5)
+  expect(ui.registered).toBe(4)
   await $.tool.call({ tool: ADD, purpose: '桌面版也能用', intents: [{ summary: '面板出現', check: '看得到', source: '面板出現' }] } as never)
   const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await pane.find({ type: 'Text', text: /面板出現/ }))?.text).toBe('○ 1. 面板出現')
@@ -714,7 +714,7 @@ test("a background task's notification carries the open goals; other hidden prom
   expect('context' in other && (other.context ?? []).length).toBe(0)
 })
 
-test("after a turn, a goal its output shows passing is auto-ticked, shown, and confirmed by Claude", async ($, on) => {
+test("after a turn, a goal its output shows passing is ticked and counted at once, tagged as seen in output", async ($, on) => {
   const store = engine(on)
   let toasts: string[] = []
   on('ui.toast', (_, e) => {
@@ -765,18 +765,18 @@ test("after a turn, a goal its output shows passing is auto-ticked, shown, and c
   expect(saved.intents[0]?.isAuto).toBe(true)
   expect(saved.intents[0]?.evidence).toBe('DraftPersistTests：3 個測試 0 失敗')
   expect(saved.intents[1]?.isMet).toBe(false)
-  expect(toasts.some(t => t.includes('自動勾選目標 1'))).toBe(true)
+  expect(toasts.some(t => t.includes('觀察者：勾選目標 1'))).toBe(true)
 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await pane.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
-  expect((await pane.find({ type: 'Button', key: 'done-toggle' }))?.text).toBe('✓ 已完成 1 項（1 項自動） ▸')
+  expect((await pane.find({ type: 'Button', key: 'done-toggle' }))?.text).toBe('✓ 已完成 1 項（1 項從輸出看到） ▸')
   await pane.press({ key: 'done-toggle' })
-  expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.text).toBe('✓ 1. 關掉 app 後草稿要保留（自動・待確認）')
+  expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.text).toBe('✓ 1. 關掉 app 後草稿要保留（從輸出看到）')
   await pane.unmount()
 
   // Claude reads the auto tick beside the next prompt and confirms it.
   const next = await $.prompt.submit({ text: '繼續' } as never)
-  expect('context' in next && next.context?.some(c => c.includes('1. [request · goal · met (auto, unconfirmed)]'))).toBe(true)
+  expect('context' in next && next.context?.some(c => c.includes('1. [request · goal · met (seen in output)]'))).toBe(true)
   await $.tool.call({ tool: MET, id: '1', evidence: '我看過輸出：3/3 通過' } as never)
   const confirmed = store.get(`wt:${ROOT}`) as typeof saved
   expect(confirmed.intents[0]?.isAuto).toBe(false)
@@ -842,8 +842,8 @@ test('a request breaks into parts; progress counts the parts and the request is 
   let shown = await texts(pane)
   expect(shown.some(x => x.endsWith(' 1/2') && /[▓░]/.test(x))).toBe(true)
   expect(shown).toContain('◐ 1. 草稿不再消失 1/2')
-  expect(shown).toContain('  ✓ 2. 關掉 app 後草稿還在')
-  expect(shown).toContain('  ○ 3. 切換筆記本後草稿還在')
+  expect(shown).toContain('  ✓ 1a. 關掉 app 後草稿還在')
+  expect(shown).toContain('  ○ 1b. 切換筆記本後草稿還在')
   await pane.unmount()
 
   await $.tool.call({ tool: MET, id: '3', evidence: 'SwitchTests 2/2' } as never)
@@ -1015,8 +1015,8 @@ test('the stage line shows where the session is now: edits after a failing test 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const shown = await texts(pane)
   // The latest stage only, no trail.
-  expect(shown).toContain('修正')
-  expect(shown.some(x => x.includes('›') || x === '調查' || x === '實作')).toBe(false)
+  expect(shown).toContain('現在：修正')
+  expect(shown.some(x => x.includes('›'))).toBe(false)
   await pane.unmount()
 })
 
@@ -1035,87 +1035,12 @@ test("after a turn where Claude already updated the list, the check adds nothing
   setMessages(() => ({
     value: [
       { role: 'user', text: '匯出 PDF 要能選頁', toolUses: [] },
-      { role: 'assistant', text: '好', toolUses: [{ tool_use_id: 'a', tool: ADD, input: {} }] },
+      { role: 'assistant', text: '好', toolUses: [{ tool_use_id: 'a', tool: ADD, input: { intents: [{ source: '匯出 PDF 要能選頁' }] } }] },
     ],
   }))
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
   await ui.clock.settle()
   expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.length).toBe(2)
-})
-
-const PHASE = 'mcp__intent-tracker__intent_phase'
-
-test('a request planned in phases shows each phase (done, current, later) with its parts, and the current stage under the current one', async ($, on) => {
-  engine(on)
-  const toasts: string[] = []
-  on('ui.toast', (_, e) => {
-    toasts.push(String((e as { text?: unknown }).text ?? e))
-    return { value: undefined }
-  })
-  on('tool.call', () => ({ result: 'ok' }) as never)
-  await start($)
-  await $.tool.call({
-    tool: ADD,
-    purpose: '修好草稿',
-    intents: [
-      { summary: '草稿不再消失', check: '整體', source: '修好草稿消失的問題', phases: ['確認做法', '做出修正', '驗證沒弄壞別的'] },
-      { summary: '關掉 app 後草稿還在', check: 'DraftPersistTests', parent: '+1', phase: '2' },
-      { summary: '切換筆記本後草稿還在', check: 'SwitchTests', parent: '+1', phase: '2' },
-      { summary: '同步照常', check: 'SyncTests', parent: '+1', phase: '3' },
-    ],
-  } as never)
-  // A breakdown made with its request is no news: no notice.
-  expect(toasts.length).toBe(0)
-  // The first phase has no parts: Claude marks it done.
-  await $.tool.call({ tool: PHASE, request: '1', id: '1', done: true } as never)
-  await $.tool.call({ tool: MET, id: '2', evidence: '3/3' } as never)
-  await $.tool.call({ tool: 'Edit', file_path: 'a.ts', old_string: 'a', new_string: 'b' } as never)
-
-  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  let shown = await texts(pane)
-  expect(shown).toContain('  ✓ 階段 1 · 確認做法')
-  expect(shown).toContain('  ● 階段 2 · 做出修正 1/2')
-  expect(shown).toContain('      實作')
-  expect(shown).toContain('    ✓ 2. 關掉 app 後草稿還在')
-  expect(shown).toContain('    ○ 3. 切換筆記本後草稿還在')
-  expect(shown).toContain('  ○ 階段 3 · 驗證沒弄壞別的 0/1')
-  expect(shown.some(x => x.endsWith(' 1/3') && /[▓░]/.test(x))).toBe(true)
-  await pane.unmount()
-
-  // The plan changes: a part is added later, a phase renamed and moved, another cancelled.
-  await $.tool.call({ tool: ADD, intents: [{ summary: '當機後草稿還在', check: 'CrashTests', parent: '1', phase: 'P2' }] } as never)
-  await $.tool.call({ tool: PHASE, request: '1', add: ['效能確認'] } as never)
-  await $.tool.call({ tool: PHASE, request: '1', id: 'P3', title: '回歸驗證', position: 2 } as never)
-  await $.tool.call({ tool: PHASE, request: '1', id: 'P4', cancel: '不需要' } as never)
-  await $.tool.call({ tool: REVISE, id: '4', phase: 'P2' } as never)
-  expect(toasts).toContain('Claude 新增了分項 5')
-  expect(toasts).toContain('Claude 調整了需求 1 的階段')
-  expect(toasts).toContain('Claude 移動了分項 4')
-
-  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  shown = await texts(pane)
-  expect(shown).toContain('  ✓ 階段 1 · 確認做法')
-  // P3 moved to position 2; empty now that its part moved, it is current (not marked done).
-  expect(shown).toContain('  ● 階段 2 · 回歸驗證')
-  expect(shown).toContain('  ○ 階段 3 · 做出修正 1/4')
-  expect(shown.some(x => x.includes('效能確認'))).toBe(false)
-  await pane.unmount()
-})
-
-test('a phase cannot be ticked by hand while it has parts, and a part needs a live phase of its own request', async ($, on) => {
-  engine(on)
-  await start($)
-  await $.tool.call({
-    tool: ADD,
-    intents: [
-      { summary: '草稿要保留', check: 'x', source: '關掉 app 後草稿要保留', phases: ['做', '驗'] },
-      { summary: '關掉還在', check: 'y', parent: '+1', phase: '1' },
-    ],
-  } as never)
-  const done = await $.tool.call({ tool: PHASE, request: '1', id: 'P1', done: true } as never)
-  expect('deny' in done).toBe(true)
-  const missing = await $.tool.call({ tool: ADD, intents: [{ summary: 'z', check: 'z', parent: '1', phase: '9' }] } as never)
-  expect('deny' in missing).toBe(true)
 })
 
 test("the person's dialog answers and the messages they type mid-turn count as their own words", async ($, on) => {
@@ -1151,4 +1076,148 @@ test("the person's dialog answers and the messages they type mid-turn count as t
     intents: [{ summary: 'c', check: 'c', source: 'please dont leave any history in the pane' }],
   } as never)
   expect('deny' in midTurn).toBe(false)
+})
+
+/** A request "修好草稿" (1) with three parts 1a–1c. */
+async function seedParts($: Parameters<Parameters<typeof test>[1]>[0]) {
+  await start($)
+  await $.tool.call({
+    tool: ADD,
+    purpose: '修好草稿',
+    intents: [
+      { summary: '草稿不再消失', check: '整體', source: '修好草稿消失的問題' },
+      { summary: '關掉 app 後草稿還在', check: 'DraftPersistTests', parent: '+1' },
+      { summary: '切換筆記本後草稿還在', check: 'SwitchTests', parent: '+1' },
+      { summary: '同步照常', check: 'SyncTests', parent: '+1' },
+    ],
+  } as never)
+}
+
+test('several parts can be worked on at once, each showing its own activity; a subagent\'s goes to the part it was sent for', async ($, on) => {
+  engine(on)
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'ag-1' }) as never)
+  on('turn.complete', () => ({ text: 'done' }))
+  await seedParts($)
+
+  await $.tool.call({ tool: REVISE, id: '1a', active: true } as never)
+  await $.tool.call({ tool: REVISE, id: '1b', agent: 'scan the switch code' } as never)
+  await $.agent.spawn({ prompt: 'look', description: '[Opus High · FULL] scan the switch code' })
+  // The subagent reads; the main loop edits.
+  await $.tool.call({ tool: 'Read', file_path: 'Switch.swift', agentId: 'ag-1' } as never)
+  await $.tool.call({ tool: 'Edit', file_path: 'Draft.swift', old_string: 'a', new_string: 'b' } as never)
+
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  let shown = await texts(pane)
+  expect(shown).toContain('  ● 1a. 關掉 app 後草稿還在  現在：實作')
+  expect(shown).toContain('  ● 1b. 切換筆記本後草稿還在  現在：調查')
+  expect(shown).toContain('  ○ 1c. 同步照常')
+  // With activity on the parts, no separate stage line under the bar.
+  expect(shown.some(x => x.startsWith('現在：'))).toBe(false)
+  await pane.unmount()
+
+  // The subagent finishes: its part keeps ● but its activity clears.
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 's', reason: 'answer', agentId: 'ag-1' } as never)
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  shown = await texts(pane)
+  expect(shown).toContain('  ● 1b. 切換筆記本後草稿還在')
+  // Ticking a part ends its focus.
+  await pane.unmount()
+  await $.tool.call({ tool: MET, id: '1a', evidence: '3/3' } as never)
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await texts(pane)).toContain('  ✓ 1a. 關掉 app 後草稿還在')
+  await pane.unmount()
+})
+
+test("Claude's changes to parts are told in one notice at the end of the turn; reordering relabels them", async ($, on) => {
+  const store = engine(on)
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(String((e as { text?: unknown }).text ?? e))
+    return { value: undefined }
+  })
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: '{"onTrack": true}', usage: USAGE } }))
+  await seedParts($)
+  expect(toasts.length).toBe(0)
+
+  await $.tool.call({ tool: ADD, intents: [{ summary: '當機後草稿還在', check: 'CrashTests', parent: '1' }] } as never)
+  await $.tool.call({ tool: REVISE, id: '1c', cancel: '同步沒被動到，不用測' } as never)
+  // After the cancel the new part is 1c (labels follow the live order).
+  await $.tool.call({ tool: REVISE, id: '1c', position: 1 } as never)
+  expect(toasts.length).toBe(0)
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  expect(toasts).toEqual(['Claude 新增了「當機後草稿還在」；Claude 取消了「同步照常」；Claude 移動了「當機後草稿還在」'])
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const shown = await texts(pane)
+  expect(shown).toContain('  ○ 1a. 當機後草稿還在')
+  expect(shown).toContain('  ○ 1b. 關掉 app 後草稿還在')
+  expect(shown).toContain('  ○ 1c. 切換筆記本後草稿還在')
+  await pane.unmount()
+  expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.find(one => one.ai === '同步照常')?.closed?.as).toBe('cancelled')
+})
+
+test('a result wakes the observer: it ticks what the output shows and flags a part the work has overtaken', async ($, on) => {
+  const store = engine(on)
+  on('ui.toast', () => ({ value: undefined }))
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  const prompts: string[] = []
+  on('model.complete', (_, e) => {
+    prompts.push(String((e as { prompt?: unknown }).prompt))
+    return {
+      value: {
+        isAnswered: true,
+        text: JSON.stringify({
+          met: [{ id: '1a', evidence: 'DraftPersistTests：3 passed' }],
+          stale: [{ id: '1b', why: '原因不在切換，而在存檔時機' }],
+        }),
+        usage: USAGE,
+      },
+    }
+  })
+  await seedParts($)
+  setMessages(() => ({
+    value: [
+      { role: 'user', text: '修好草稿消失的問題', toolUses: [] },
+      {
+        role: 'assistant',
+        text: '',
+        toolUses: [{ tool_use_id: 'b', tool: 'Bash', input: { command: 'npm test' }, text: 'DraftPersistTests: 3 passed' }],
+      },
+    ],
+  }))
+  await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+
+  // A result pass asks only about ticks, breaks and stale parts.
+  expect(prompts.length).toBe(1)
+  expect(prompts[0]).toContain('DraftPersistTests: 3 passed')
+  expect(prompts[0]).not.toContain('drift')
+  const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
+  // Counted at once: evidence-quoted, no confirming needed.
+  expect(saved.intents.find(one => one.id === '2')).toMatchObject({ isMet: true, isAuto: true })
+  expect(saved.intents.find(one => one.id === '3')?.isStale).toBe(true)
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const shown = await texts(pane)
+  expect(shown).toContain('  ✓ 1a. 關掉 app 後草稿還在（從輸出看到）')
+  expect(shown).toContain('  ○ 1b. 切換筆記本後草稿還在（可能過時）')
+  await pane.unmount()
+
+  // Claude re-plans the stale part: the flag clears.
+  await $.tool.call({ tool: REVISE, id: '1b', summary: '存檔時機正確，草稿不會掉' } as never)
+  expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.find(one => one.id === '3')?.isStale).toBe(false)
+})
+
+test('a changed request carries the parts that still apply to the new one', async ($, on) => {
+  const store = engine(on)
+  await seedParts($)
+  ui.messages = [...ui.messages, { role: 'user', text: '改成：草稿要自動存到雲端', toolUses: [] }]
+  await $.tool.call({
+    tool: ADD,
+    intents: [{ summary: '草稿自動存雲端', check: 'y', source: '草稿要自動存到雲端', replaces: '1' }],
+  } as never)
+  const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
+  expect(saved.intents.filter(one => one.parent === '5' && !one.closed).length).toBe(3)
 })

@@ -101,9 +101,12 @@ export type Strings = {
   autoReplaced: (ids: readonly string[]) => string
   autoAdded: (n: number) => string
   limits: string
-  phase: string
   partsChanged: (what: 'added' | 'edited' | 'cancelled' | 'moved' | 'restored', ids: readonly string[]) => string
-  phasesChanged: (request: string) => string
+  toastTurn: (notes: readonly string[]) => string
+  autoStale: (ids: readonly string[]) => string
+  nowLabel: string
+  staleLabel: string
+  seenInOutput: string
   holding: string
   brokenLabel: string
   confirmCancelItem: string
@@ -169,19 +172,22 @@ const EN: Strings = {
   customPlaceholder: 'Type a language, Enter to save',
   colon: ': ',
   paren: text => ` (${text})`,
-  autoMark: 'auto, unconfirmed',
-  autoCount: n => `${n} auto`,
-  toastAuto: parts => `Auto: ${parts.join('; ')} (Claude confirms next)`,
+  autoMark: 'needs confirming',
+  autoCount: n => `${n} seen in output`,
+  toastAuto: parts => `Observer: ${parts.join('; ')}`,
   autoTicked: ids => `ticked ${ids.join(', ')}`,
   autoBroken: ids => `marked limit ${ids.join(', ')} broken`,
   autoCancelled: ids => `cancelled ${ids.join(', ')}`,
   autoReplaced: ids => `replaced ${ids.join(', ')}`,
   autoAdded: n => `added ${n} request${n === 1 ? '' : 's'}`,
   limits: 'Limits',
-  phase: 'Phase',
   partsChanged: (what, ids) =>
-    `Claude ${{ added: 'added', edited: 'edited', cancelled: 'cancelled', moved: 'moved', restored: 'restored' }[what]} part ${ids.join(', ')}`,
-  phasesChanged: request => `Claude updated the phases of request ${request}`,
+    `Claude ${{ added: 'added', edited: 'edited', cancelled: 'cancelled', moved: 'moved', restored: 'restored' }[what]} ${ids.map(x => `"${x}"`).join(', ')}`,
+  toastTurn: notes => notes.join('; '),
+  autoStale: ids => `flagged ${ids.join(', ')} as maybe out of date`,
+  nowLabel: 'now',
+  staleLabel: 'may be out of date',
+  seenInOutput: 'seen in output',
   holding: 'holding',
   brokenLabel: 'Broken',
   confirmCancelItem: 'Cancel this item?',
@@ -263,19 +269,22 @@ const ZH: Strings = {
   customPlaceholder: '輸入一種語言，Enter 儲存',
   colon: '：',
   paren: text => `（${text}）`,
-  autoMark: '自動・待確認',
-  autoCount: n => `${n} 項自動`,
-  toastAuto: parts => `已自動${parts.join('；')}（Claude 下次會確認）`,
+  autoMark: '待確認',
+  autoCount: n => `${n} 項從輸出看到`,
+  toastAuto: parts => `觀察者：${parts.join('；')}`,
   autoTicked: ids => `勾選目標 ${ids.join('、')}`,
   autoBroken: ids => `標記限制 ${ids.join('、')} 被破壞`,
   autoCancelled: ids => `取消 ${ids.join('、')}`,
   autoReplaced: ids => `取代 ${ids.join('、')}`,
   autoAdded: n => `加入 ${n} 項需求`,
   limits: '限制',
-  phase: '階段',
   partsChanged: (what, ids) =>
-    `Claude ${{ added: '新增', edited: '修改', cancelled: '取消', moved: '移動', restored: '還原' }[what]}了分項 ${ids.join('、')}`,
-  phasesChanged: request => `Claude 調整了需求 ${request} 的階段`,
+    `Claude ${{ added: '新增', edited: '修改', cancelled: '取消', moved: '移動', restored: '還原' }[what]}了「${ids.join('」「')}」`,
+  toastTurn: notes => notes.join('；'),
+  autoStale: ids => `標記 ${ids.join('、')} 可能過時`,
+  nowLabel: '現在',
+  staleLabel: '可能過時',
+  seenInOutput: '從輸出看到',
   holding: '守住中',
   brokenLabel: '被破壞',
   confirmCancelItem: '取消這一項？',
@@ -359,19 +368,22 @@ const JA: Strings = {
   customPlaceholder: '言語を入力（Enter で保存）',
   colon: '：',
   paren: text => `（${text}）`,
-  autoMark: '自動・未確認',
-  autoCount: n => `${n} 件自動`,
-  toastAuto: parts => `自動で${parts.join('；')}（次に Claude が確認します）`,
+  autoMark: '未確認',
+  autoCount: n => `${n} 件は出力で確認`,
+  toastAuto: parts => `オブザーバー：${parts.join('；')}`,
   autoTicked: ids => `目標 ${ids.join('、')} をチェック`,
   autoBroken: ids => `制約 ${ids.join('、')} を破れたと記録`,
   autoCancelled: ids => `${ids.join('、')} を取り消し`,
   autoReplaced: ids => `${ids.join('、')} を置き換え`,
   autoAdded: n => `依頼を ${n} 件追加`,
   limits: '制約',
-  phase: 'フェーズ',
   partsChanged: (what, ids) =>
-    `Claude が分項 ${ids.join('、')} を${{ added: '追加', edited: '編集', cancelled: '取り消し', moved: '移動', restored: '復元' }[what]}しました`,
-  phasesChanged: request => `Claude が依頼 ${request} のフェーズを更新しました`,
+    `Claude が「${ids.join('」「')}」を${{ added: '追加', edited: '編集', cancelled: '取り消し', moved: '移動', restored: '復元' }[what]}しました`,
+  toastTurn: notes => notes.join('；'),
+  autoStale: ids => `${ids.join('、')} を古い可能性ありと記録`,
+  nowLabel: '現在',
+  staleLabel: '古い可能性あり',
+  seenInOutput: '出力で確認',
   holding: '維持中',
   brokenLabel: '破られた',
   confirmCancelItem: 'この項目を取り消しますか？',

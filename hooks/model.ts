@@ -7,8 +7,12 @@
 // request into plain outcomes the person would recognise as pieces of what
 // they asked (`parent`). Progress counts parts; a request with no parts counts
 // as one. Claude's own ideas outside the requests never join the list.
+//
+// Parts are ordered; any number may be ACTIVE at once (Claude working on it,
+// or a subagent sent for it), each with its own live activity. A part the
+// work shows no longer applies is flagged STALE until Claude re-plans.
 
-import type { Actor, Closed, HistoryEntry, HistoryWhat, Intent, Phase, Purpose, Stage, StageKey } from '../types'
+import type { Actor, Closed, HistoryEntry, HistoryWhat, Intent, Purpose, Stage, StageKey } from '../types'
 
 export const HISTORY_MAX = 20
 
@@ -31,45 +35,40 @@ export function progress(list: readonly Intent[]): { met: number; total: number 
   return { met: counted.filter(one => one.isMet).length, total: counted.length }
 }
 
-/** A goal is done when it is ticked, or, broken down, when every live part (and every planned phase) is. */
+/** A goal is done when it is ticked, or, broken down, when every live part is. */
 export function isDone(list: readonly Intent[], one: Intent): boolean {
   const parts = partsOf(list, one.id)
-  const isPartsDone = parts.length > 0 ? parts.every(part => part.isMet) : one.isMet
-  return isPartsDone && livePhases(one).every(phase => isPhaseDone(list, one, phase))
+  return parts.length > 0 ? parts.every(part => part.isMet) : one.isMet
 }
 
-export function livePhases(request: Intent): Phase[] {
-  return (request.phases ?? []).filter(phase => !phase.closed)
+/** How the person sees an item: a request by its number, a part by its request's number and a letter ("1b"). */
+export function labelOf(list: readonly Intent[], one: Intent): string {
+  if (!one.parent) return one.id
+  const siblings = list.filter(x => x.parent === one.parent && (isLive(x) || x.id === one.id))
+  const n = Math.max(0, siblings.findIndex(x => x.id === one.id))
+  return `${one.parent}${n < 26 ? String.fromCharCode(97 + n) : `-${n + 1}`}`
 }
 
-/** The live parts of a request that fall in one phase. */
-export function phaseParts(list: readonly Intent[], request: Intent, phaseId: string): Intent[] {
-  return partsOf(list, request.id).filter(part => part.phase === phaseId)
+/** An item named by its id ("3") or its label ("1b"). */
+export function resolveId(list: readonly Intent[], ref: string): string | undefined {
+  const r = ref.trim().toLowerCase()
+  if (list.some(one => one.id === r)) return r
+  // A live part first: a closed one keeps the label it had, which a live one may now hold.
+  return (list.find(one => one.parent && isLive(one) && labelOf(list, one) === r) ?? list.find(one => one.parent && labelOf(list, one) === r))?.id
 }
 
-/** A phase with parts is done when they all are; one without is done when marked so. */
-export function isPhaseDone(list: readonly Intent[], request: Intent, phase: Phase): boolean {
-  const parts = phaseParts(list, request, phase.id)
-  return parts.length > 0 ? parts.every(part => part.isMet) : phase.isDone === true
-}
-
-/** The phase the work is in: the first one not done. */
-export function currentPhase(list: readonly Intent[], request: Intent): Phase | undefined {
-  return livePhases(request).find(phase => !isPhaseDone(list, request, phase))
-}
-
-export function nextPhaseNumber(list: readonly Intent[]): number {
-  let max = 0
-  for (const one of list) for (const phase of one.phases ?? []) max = Math.max(max, Number(phase.id.slice(1)) || 0)
-  return max + 1
-}
-
-/** A phase named by its id ("P3") or by its position among the live phases ("2"). */
-export function findPhase(request: Intent, ref: string): Phase | undefined {
-  const all = request.phases ?? []
-  const byId = all.find(phase => phase.id.toLowerCase() === ref.trim().toLowerCase())
-  if (byId) return byId
-  return /^\d+$/.test(ref.trim()) ? livePhases(request)[Number(ref.trim()) - 1] : undefined
+/** Moves a part to a 1-based position among its request's live parts. */
+export function movePart(list: readonly Intent[], id: string, position: number): Intent[] {
+  const part = list.find(one => one.id === id)
+  if (!part?.parent) return [...list]
+  const rest = list.filter(one => one.id !== id)
+  const siblings = rest.filter(one => one.parent === part.parent && isLive(one))
+  if (siblings.length === 0) return [...list]
+  const p = Math.min(Math.max(1, Math.floor(position)), siblings.length + 1)
+  const last = siblings[siblings.length - 1] as Intent
+  const at = p <= siblings.length ? rest.indexOf(siblings[p - 1] as Intent) : rest.indexOf(last) + 1
+  rest.splice(at, 0, part)
+  return rest
 }
 
 export function nextId(list: readonly Intent[]): number {
@@ -84,14 +83,11 @@ export function entry(at: number, by: Actor, what: HistoryWhat, note?: string): 
   return note ? { at, by, what, note } : { at, by, what }
 }
 
-/**
- * Closes an item and, for a request, its live parts with it (restored
- * together); with a phase id, the parts of that phase of request `id`.
- */
-export function close(list: readonly Intent[], id: string, closed: Closed, phaseId?: string): Intent[] {
+/** Closes an item and, for a request, its live parts with it (restored together). */
+export function close(list: readonly Intent[], id: string, closed: Closed): Intent[] {
   return list.map(one => {
-    if (!phaseId && one.id === id && isLive(one)) return withHistory({ ...one, closed }, entry(closed.at, closed.by, closed.as, closed.reason))
-    if (one.parent === id && isLive(one) && (!phaseId || one.phase === phaseId)) {
+    if (one.id === id && isLive(one)) return withHistory({ ...one, closed, isActive: false }, entry(closed.at, closed.by, closed.as, closed.reason))
+    if (one.parent === id && isLive(one)) {
       const cascade: Closed = { ...closed, as: 'cancelled', isCascade: true }
       delete cascade.replacedBy
       return withHistory({ ...one, closed: cascade }, entry(closed.at, closed.by, 'cancelled', closed.reason))
@@ -138,7 +134,7 @@ const NOT_THE_PERSON = /^\s*(<task-notification|<system-reminder|<command-|\(Goa
 export function dialogAnswers(result: string): string[] {
   const answers: string[] = []
   for (const m of result.matchAll(/"=\s*"((?:[^"\\]|\\.)*)"/g)) if (m[1]) answers.push(m[1])
-  for (const m of result.matchAll(/user notes:\s*([^\n]+)/gi)) if (m[1]) answers.push(m[1])
+  for (const m of result.matchAll(/\bnotes:\s*([\s\S]+?)(?=, "[^"]*"=|\. You can now continue|$)/gi)) if (m[1]) answers.push(m[1])
   return answers
 }
 
@@ -192,13 +188,15 @@ function statusText(list: readonly Intent[], one: Intent): string {
     const met = parts.filter(part => part.isMet).length
     return met === parts.length ? `met (all ${met} parts)` : `open (${met}/${parts.length} parts met)`
   }
-  if (one.isMet) return `met${one.isAuto ? auto : ''}`
-  return one.isAuto ? `open (added${auto})` : 'open'
+  if (one.isMet) return `met${one.isAuto ? ' (seen in output)' : ''}`
+  const flags = [one.isActive ? 'ACTIVE' : '', one.isStale ? 'STALE: may no longer apply, re-plan' : ''].filter(Boolean).join(', ')
+  return `${one.isAuto ? `open (added${auto})` : 'open'}${flags ? ` [${flags}]` : ''}`
 }
 
 function line(list: readonly Intent[], one: Intent, isWithHistory: boolean): string {
-  const role = one.parent ? `part of ${one.parent}` : `request · ${kindOf(one)}`
+  const role = one.parent ? `part ${labelOf(list, one)} of ${one.parent}` : `request · ${kindOf(one)}`
   const fields = [`${one.id}. [${role} · ${statusText(list, one)}] ${one.ai}`]
+  if (one.agent) fields.push(`subagent: "${one.agent}"`)
   if (one.mine) fields.push(`person's words: ${one.mine}`)
   if (one.source && !one.parent) fields.push(`source: "${one.source}"`)
   fields.push(`check: ${one.check || '(none)'}`)
@@ -219,19 +217,10 @@ function line(list: readonly Intent[], one: Intent, isWithHistory: boolean): str
 export function listText(p: Purpose, list: readonly Intent[], isWithHistory = false): string {
   const { met, total } = progress(list)
   const lines = [`Purpose: ${p.ai || '(unset)'}${p.mine ? ` | person's words: ${p.mine}` : ''}`]
-  lines.push(`Progress: ${met}/${total} goals met (parts count; a request with no parts counts as one)`)
+  lines.push(`Progress: ${met}/${total} parts met (a request with no parts counts as one)`)
   for (const request of list.filter(one => isRequest(one) && isLive(one))) {
     lines.push(line(list, request, isWithHistory))
-    const phases = livePhases(request)
-    const now = currentPhase(list, request)
-    phases.forEach((phase, n) => {
-      const state = isPhaseDone(list, request, phase) ? 'done' : phase.id === now?.id ? 'current' : 'not started'
-      lines.push(`  Phase ${phase.id} (#${n + 1}, ${state}): ${phase.title}`)
-      for (const part of phaseParts(list, request, phase.id)) lines.push(`    ${line(list, part, isWithHistory)}`)
-    })
-    const loose = partsOf(list, request.id).filter(part => !phases.some(phase => phase.id === part.phase))
-    if (phases.length > 0 && loose.length > 0) lines.push('  (in no phase)')
-    for (const part of loose) lines.push(`  ${phases.length > 0 ? '  ' : ''}${line(list, part, isWithHistory)}`)
+    for (const part of partsOf(list, request.id)) lines.push(`  ${line(list, part, isWithHistory)}`)
   }
   // A live part whose request is gone (an older list): shown on its own.
   for (const orphan of list.filter(one => one.parent && isLive(one) && !list.some(r => r.id === one.parent && isLive(r)))) {

@@ -71,10 +71,15 @@ export type Intent = {
   closed?: Closed
   broken?: Broken
   history?: HistoryEntry[]
-  /** A request's planned phases, in order. */
+  /** Planned phases of v0.12 (no longer used; kept so older lists load). */
   phases?: Phase[]
-  /** A part: the id of the phase of its request it falls in. */
   phase?: string
+  /** Being worked on now, by Claude or a subagent sent for it; any number at once. */
+  isActive?: boolean
+  /** Words of the description of the subagent sent for this part; links its activity here. */
+  agent?: string
+  /** The work shows it may no longer apply: Claude re-plans it. */
+  isStale?: boolean
 }
 
 /** Where the work is now: plan, investigate, build, test, fix (after a failed test), review. */
@@ -114,6 +119,18 @@ declare module 'claude-code' {
       isActive: boolean
       /** Where the work is now, from the session's own tool calls (this session only). */
       stage: Shaped<Stage>
+      /** Each active part's live activity (this session): part id → stage. */
+      activity: Record<string, StageKey>
+      /** Running subagents linked to a part: agent id → part id. */
+      agentLinks: Record<string, string>
+      /** Subagents started in this session, by id: their description (to link them later). */
+      spawned: Record<string, string>
+      /** When the observer's pending pass after a burst of results is due (ms since the epoch). */
+      observeAt: number
+      /** How far into the conversation the observer has read tool output (message count). */
+      observed: number
+      /** Changes Claude made to parts this turn, told to the person in one notice at its end. */
+      notes: string[]
       /** What the person typed in this session (prompts, mid-turn messages, dialog answers), newest last. */
       heardSaid: { text: string; at: number }[]
       /** The item whose details (source, history) are shown; one at a time. */
