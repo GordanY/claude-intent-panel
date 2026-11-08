@@ -1017,18 +1017,17 @@ async function checkTurn($: EngineInterface, durationMs = 0, mode: 'turn' | 'res
   const seenUpTo = await read($, observed)
   const from = audits.length > 0 ? start + 1 : Math.max(start + 1, seenUpTo > messages.length ? 0 : seenUpTo)
   const work: string[] = []
-  const outputs: string[] = []
-  let outputLength = 0
+  // Every output the pass may read, in order; past the budget the newest are kept (a turn's last runs are what
+  // its ticks rest on).
+  const read$: string[] = []
   // What Claude itself changed this turn: the observer leaves those to it.
   const touchedIds = new Set<string>()
   const addedSources: string[] = []
   messages.slice(start + 1).forEach((m, n) => {
-    if (m.role === 'user' && audits.length > 0 && /<task-notification\b/.test(m.text) && outputLength < OUTPUT_ALL) {
+    if (m.role === 'user' && audits.length > 0 && /<task-notification\b/.test(m.text)) {
       // A background task's report is output the turn saw.
       const out = m.text.trim()
-      const entry = `--- background task notification\n${out.length > OUTPUT_EACH ? `…${out.slice(-OUTPUT_EACH)}` : out}`
-      outputs.push(entry)
-      outputLength += entry.length
+      read$.push(`--- background task notification\n${out.length > OUTPUT_EACH ? `…${out.slice(-OUTPUT_EACH)}` : out}`)
     }
     if (m.role !== 'assistant') return
     if (m.text.trim()) work.push(`said: ${m.text.trim().slice(0, 600)}`)
@@ -1040,14 +1039,19 @@ async function checkTurn($: EngineInterface, durationMs = 0, mode: 'turn' | 'res
       if (use.tool.startsWith(`mcp__${P}__`)) continue
       work.push(`${use.tool}: ${JSON.stringify(use.input).slice(0, 300)}`)
       const out = (use.text ?? '').trim()
-      if (start + 1 + n < from || !out || outputLength >= OUTPUT_ALL) continue
+      if (start + 1 + n < from || !out) continue
       // The tail of a long output is where a test run's summary is.
       const kept = out.length > OUTPUT_EACH ? `…${out.slice(-OUTPUT_EACH)}` : out
-      const entry = `--- ${use.tool} ${JSON.stringify(use.input).slice(0, 160)}${use.isError ? ' (error)' : ''}\n${kept}`
-      outputs.push(entry)
-      outputLength += entry.length
+      read$.push(`--- ${use.tool} ${JSON.stringify(use.input).slice(0, 160)}${use.isError ? ' (error)' : ''}\n${kept}`)
     }
   })
+  const outputs: string[] = []
+  let outputLength = 0
+  for (let i = read$.length - 1; i >= 0 && outputLength < OUTPUT_ALL; i -= 1) {
+    const entry = read$[i] ?? ''
+    outputs.unshift(entry)
+    outputLength += entry.length
+  }
   await update($, observed, () => messages.length)
   if (mode === 'result' && outputs.length === 0) return
   if (work.length === 0 && personWords.length === 0 && toJudge.length === 0) return
@@ -1063,7 +1067,7 @@ async function checkTurn($: EngineInterface, durationMs = 0, mode: 'turn' | 'res
     prompt:
       `${list.length > 0 ? listText(p, list) : 'The list is empty.'}\n\n` +
       `The person's latest message${personWords.length === 0 ? ' (an automatic notification, not the person)' : ''}:\n${ask}\n\n` +
-      `What the assistant did this turn:\n${work.join('\n').slice(0, 8000) || '(nothing)'}\n\n` +
+      `What the assistant did this turn${work.join('\n').length > 8000 ? ' (its latest steps)' : ''}:\n${work.join('\n').slice(-8000) || '(nothing)'}\n\n` +
       (outputs.length > 0
         ? `What the tools returned (${audits.length > 0 ? 'this turn' : 'new since the last check'}; tails of long outputs):\n${outputs.join('\n')}\n\n`
         : '') +

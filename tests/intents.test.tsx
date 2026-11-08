@@ -2577,3 +2577,33 @@ test('sections are divided and the tools and settings stay pinned at the bottom'
   expect((await pane.find({ type: 'Box', key: 'page' }))?.props.minHeight).toBeUndefined()
   await pane.unmount()
 })
+
+test("the observer's audit reads a long turn's latest outputs, where its ticks rest", async ($, on) => {
+  engine(on)
+  on('ui.toast', () => ({ value: undefined }))
+  on('turn.complete', () => ({ text: 'done' }))
+  const prompts: string[] = []
+  on('model.complete', (_, e) => {
+    prompts.push(e.prompt)
+    return { value: { isAnswered: true, text: '{"onTrack": true}', usage: USAGE } }
+  })
+  await seed($)
+  await $.tool.call({ tool: MET, id: '1', evidence: 'DraftPersistTests 通過' } as never)
+  // Twenty early failing runs fill the budget; the last run passes.
+  const early = Array.from({ length: 20 }, (_, n) => ({ tool_use_id: `e${n}`, tool: 'Bash', input: { command: 'npm test' }, text: `(fail) DraftPersistTests run ${n}\n${'x'.repeat(1100)}` }))
+  setMessages(() => ({
+    value: [
+      { role: 'user', text: '修好它', toolUses: [] },
+      {
+        role: 'assistant',
+        text: '',
+        toolUses: [...early, { tool_use_id: 'last', tool: 'Bash', input: { command: 'npm test' }, text: '(pass) DraftPersistTests\n93 pass' }, { tool_use_id: 'm', tool: MET, input: { id: '1', evidence: 'DraftPersistTests 通過' }, text: 'ok' }],
+      },
+    ],
+  }))
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+  const audit = prompts.find(p => p.includes("The assistant's own ticks this turn")) ?? ''
+  expect(audit).toContain('(pass) DraftPersistTests')
+  expect(audit).not.toContain('(fail) DraftPersistTests run 0')
+})
