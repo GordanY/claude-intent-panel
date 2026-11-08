@@ -1,0 +1,5 @@
+{
+  "name": "claude-intent-panel",
+  "owner": { "name": "GordanY" },
+  "plugins": [{ "name": "intent-tracker", "source": "./" }]
+}
