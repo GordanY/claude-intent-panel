@@ -92,6 +92,9 @@ export type Strings = {
   customPlaceholder: string
   colon: string
   paren: (text: string) => string
+  autoMark: string
+  autoCount: (n: number) => string
+  toastAuto: (ids: readonly string[]) => string
   startPrompt: (tools: Tools, lang: string) => string
   refreshPrompt: (tools: Tools, lang: string) => string
 }
@@ -141,6 +144,9 @@ const EN: Strings = {
   customPlaceholder: 'Type a language, Enter to save',
   colon: ': ',
   paren: text => ` (${text})`,
+  autoMark: 'auto, unconfirmed',
+  autoCount: n => `${n} auto`,
+  toastAuto: ids => `Auto-ticked goal ${ids.join(', ')} from this turn's output (Claude confirms it next)`,
   startPrompt: (t, lang) =>
     `(Goals pane) From the conversation so far, set out what this work is for and its goals: use ${t.add} to set a one-line plain-language purpose and the goals I actually want (as many as the work really has), each with a concrete check; tick goals already verified in the conversation with ${t.met} and the evidence. ` +
     `Use only what actually happened in the conversation; if it is not yet clear what we are doing, just ask me. Write everything in ${lang}. When done, tell me in a sentence or two.`,
@@ -195,6 +201,9 @@ const ZH: Strings = {
   customPlaceholder: '輸入一種語言，Enter 儲存',
   colon: '：',
   paren: text => `（${text}）`,
+  autoMark: '自動・待確認',
+  autoCount: n => `${n} 項自動`,
+  toastAuto: ids => `已依這回合的輸出自動勾選目標 ${ids.join('、')}（Claude 下次會確認）`,
   startPrompt: (t, lang) =>
     '（目標面板）請依目前為止的對話，整理這次工作的原意和目標：' +
     `用 ${t.add} 設定一行白話的原意，和我真正想要的目標（有幾個就列幾個）（每個附具體的檢查方式）；` +
@@ -251,6 +260,9 @@ const JA: Strings = {
   customPlaceholder: '言語を入力（Enter で保存）',
   colon: '：',
   paren: text => `（${text}）`,
+  autoMark: '自動・未確認',
+  autoCount: n => `${n} 件自動`,
+  toastAuto: ids => `このターンの出力から目標 ${ids.join('、')} を自動チェックしました（次に Claude が確認します）`,
   startPrompt: (t, lang) =>
     '（目標パネル）これまでの会話から、この作業の目的と目標を整理してください：' +
     `${t.add} で一行の平易な目的と、私が本当に望む目標を数を決めずに必要なだけ（それぞれ具体的な確認方法つき）設定し、会話の中で実際に確認済みの目標は ${t.met} で根拠をつけてチェックしてください。` +

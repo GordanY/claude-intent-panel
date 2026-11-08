@@ -82,6 +82,8 @@ const instructions = (language: string) => `# Intent pane (intent-tracker mod)
 A pane beside the chat shows the person, in plain ${language}, what the work in this worktree is for and which goals are met, so they do not get lost when the conversation turns technical. The list is kept per worktree across sessions. Keep it accurate and quiet (do not narrate these calls):
 - When the person states the task, or the task changes, call ${TOOL('intent_add')} with a one-line \`purpose\` and the goals. Each goal: \`summary\` is one plain ${language} sentence a non-programmer understands (no file names, SHAs, flags or jargon); \`check\` is the concrete step that proves it (a test that passes, a behaviour observed, a diff condition), in ${language}, identifiers allowed. Evidence is in ${language} too. Goals are outcomes the person wants, not your sub-steps: as many as the work really has, no fixed number. Do not re-add goals already on the list.
 - Call ${TOOL('intent_met')} only after a goal's check has actually been run or observed and passed, with the evidence. Never on intent, partial work or an unrun check. If later work breaks a met goal, call ${TOOL('intent_revise')} with reopen: true.
+- Keep the pane live: the moment a result arrives that runs a goal's check (a test or build, a subagent's report, a background task's notification), tick or reopen that goal in the same step, before you reply or move on. Such results carry an <intent-pane> note listing the open goals; act on it when it applies, ignore it when it does not.
+- After a turn, a small model may tick a goal from the turn's tool output; the list shows it as "met (auto, unconfirmed)". When you next see one, confirm it with ${TOOL('intent_met')} (your own evidence) or reopen it with ${TOOL('intent_revise')}.
 - To see the current list, call ${TOOL('intent_list')}; never call another intent tool just to read it.
 - The person may type their own words for the purpose or a goal; they reach you as context beside their prompt. Their words are the authority: when your summary or check diverges from them, revise yours to match, never the reverse.`
 
@@ -159,13 +161,48 @@ function listText(p: Purpose, list: readonly Intent[]): string {
   lines.push(`Goals met: ${met}/${list.length}`)
   for (const one of list) {
     lines.push(
-      `${one.id}. [${one.isMet ? 'met' : 'open'}] ${one.ai}` +
+      `${one.id}. [${one.isMet ? (one.isAuto ? 'met (auto, unconfirmed)' : 'met') : 'open'}] ${one.ai}` +
         (one.mine ? ` | person's words: ${one.mine}` : '') +
         ` | check: ${one.check}` +
         (one.isMet ? ` | evidence: ${one.evidence}` : ''),
     )
   }
 
+  return lines.join('\n')
+}
+
+/**
+ * Bash commands whose output usually runs a goal's check: tests, builds,
+ * linters, type-checks, verification scripts, CI status.
+ */
+const VERIFY_COMMAND =
+  /\b(test|tests|spec|build|lint|check|verify|validate|xcodebuild|pytest|jest|vitest|mocha|tsc|cargo|go\s+(test|vet|build)|make|gradle|mvn|swift\s+(test|build)|npm\s+(run|test)|pnpm|yarn|bun|rspec|rake|merge-check|gh\s+(pr|run)\s+(checks|view|watch))\b/i
+
+/** Tools whose finished result is someone else's report: a subagent's, a workflow's, a background task's. */
+const REPORT_TOOLS = new Set(['Agent', 'Task', 'Workflow', 'TaskOutput'])
+
+/**
+ * Whether a finished tool call is a result worth checking the goals against.
+ * A call started in the background has no result yet: its notification is
+ * handled when it arrives.
+ */
+function isResult(e: Record<string, unknown>): boolean {
+  if (e.run_in_background === true) return false
+  if (REPORT_TOOLS.has(String(e.tool))) return true
+  return e.tool === 'Bash' && typeof e.command === 'string' && VERIFY_COMMAND.test(e.command)
+}
+
+/** The note beside a result: the open goals and what to do if the result settles one. */
+function resultNote(list: readonly Intent[]): string | null {
+  const open = list.filter(one => !one.isMet)
+  const auto = list.filter(one => one.isMet && one.isAuto)
+  if (open.length === 0 && auto.length === 0) return null
+  const lines = ['<intent-pane>A result just arrived. If it runs one of these checks, update the pane now, before going on:']
+  for (const one of open) lines.push(`${one.id}. [open] ${one.mine || one.ai} | check: ${one.check || '(none)'}`)
+  for (const one of auto) lines.push(`${one.id}. [met (auto, unconfirmed)] ${one.mine || one.ai} | check: ${one.check || '(none)'}`)
+  lines.push(
+    `Passed → ${TOOL('intent_met')} with the evidence. Broke a met goal → ${TOOL('intent_revise')} reopen: true. Unrelated → ignore this note.</intent-pane>`,
+  )
   return lines.join('\n')
 }
 
@@ -306,22 +343,39 @@ async function sweep($: EngineInterface): Promise<void> {
   }
 }
 
-function parseVerdict(text: string): { isOnTrack: boolean; note: string; isByUser: boolean } | null {
+type Verdict = { isOnTrack: boolean; note: string; isByUser: boolean; met: { id: string; evidence: string }[] }
+
+function parseVerdict(text: string): Verdict | null {
   const match = text.match(/\{[\s\S]*\}/)
   if (!match) return null
   try {
     const value = JSON.parse(match[0]) as Record<string, unknown>
+    const met = Array.isArray(value.met) ? (value.met as Record<string, unknown>[]) : []
     return {
       isOnTrack: value.onTrack !== false,
       note: str(value.note),
       isByUser: value.byUser === true,
+      met: met
+        .filter(m => typeof m === 'object' && m !== null)
+        .map(m => ({ id: str(String(m.id ?? '')), evidence: str(m.evidence) }))
+        .filter(m => m.id && m.evidence),
     }
   } catch {
     return null
   }
 }
 
-async function checkDrift($: EngineInterface): Promise<void> {
+/** How much of each tool's output, and of all of them, the end-of-turn check reads. */
+const OUTPUT_EACH = 1200
+const OUTPUT_ALL = 14000
+
+/**
+ * After a turn: a small model reads the turn against the list. It flags
+ * off-list work (drift), and ticks open goals whose check the turn's tool
+ * output shows passing but the main conversation left unticked, marked auto
+ * until the main conversation confirms them.
+ */
+async function checkTurn($: EngineInterface): Promise<void> {
   const list = await read($, intents)
   if (list.length === 0) return
   const p = await read($, purpose)
@@ -340,35 +394,75 @@ async function checkDrift($: EngineInterface): Promise<void> {
 
   const ask = asked.text.slice(0, 2000)
   const work: string[] = []
+  const outputs: string[] = []
+  let outputLength = 0
   for (const m of messages.slice(start + 1)) {
     if (m.role !== 'assistant') continue
     if (m.text.trim()) work.push(`said: ${m.text.trim().slice(0, 600)}`)
     for (const use of m.toolUses) {
       if (use.tool.startsWith(`mcp__${P}__`)) continue
       work.push(`${use.tool}: ${JSON.stringify(use.input).slice(0, 300)}`)
+      const out = (use.text ?? '').trim()
+      if (!out || outputLength >= OUTPUT_ALL) continue
+      // The tail of a long output is where a test run's summary is.
+      const kept = out.length > OUTPUT_EACH ? `…${out.slice(-OUTPUT_EACH)}` : out
+      const entry = `--- ${use.tool} ${JSON.stringify(use.input).slice(0, 160)}${use.isError ? ' (error)' : ''}\n${kept}`
+      outputs.push(entry)
+      outputLength += entry.length
     }
   }
   if (work.length === 0) return
 
+  const language = langName(await read($, lang))
+  const open = list.filter(one => !one.isMet)
   const answer = await $.model.complete({
     model: await read($, driftModel),
-    maxTokens: 200,
+    maxTokens: 400,
     system:
-      "You check whether an AI coding assistant's latest turn stayed on the goals a person set for this work. Reply with JSON only.",
+      "You check an AI coding assistant's latest turn against the goals a person set for this work. Reply with JSON only.",
     prompt:
       `${listText(p, list)}\n\nThe person's latest message:\n${ask}\n\nWhat the assistant did this turn:\n${work.join('\n').slice(0, 8000)}\n\n` +
-      'Work that serves any goal counts as on track: investigation, setup, verification, fixing what blocks a goal, and answering a direct question about the goals. ' +
+      (outputs.length > 0 ? `What the tools returned this turn (tails of long outputs):\n${outputs.join('\n')}\n\n` : '') +
+      'Two questions.\n' +
+      '1. Drift. Work that serves any goal counts as on track: investigation, setup, verification, fixing what blocks a goal, and answering a direct question about the goals. ' +
       'Flag only work clearly unrelated to every goal and to the purpose.\n' +
-      'Reply {"onTrack": true} or {"onTrack": false, "byUser": <true if the person\'s latest message itself asked for that off-list work>, ' +
-      `"note": "<one short plain sentence in ${langName(await read($, lang))} naming the off-list work, no jargon>"}`,
+      '2. Missed ticks. For each OPEN goal, did a tool output above actually run that goal\'s check and show it passing? ' +
+      'Count it only when the output itself shows the pass (a passing test summary, a successful build line, a report stating the check passed); ' +
+      'never on a plan, a claim in what the assistant said, a partial run, or an output that shows failures. When unsure, leave it out.\n' +
+      'Reply with one JSON object: {"onTrack": true|false, "byUser": <true if the person\'s latest message itself asked for the off-list work>, ' +
+      `"note": "<when off track: one short plain sentence in ${language} naming the off-list work, no jargon>", ` +
+      `"met": [{"id": "<open goal id>", "evidence": "<one short line in ${language} naming the output that shows the pass, quoting its key line>"}]}` +
+      (open.length === 0 ? ' (No goal is open: "met" is [].)' : ''),
   })
   if (!answer.isAnswered) return
 
   const verdict = parseVerdict(answer.text)
-  if (!verdict || verdict.isOnTrack || !verdict.note) return
+  if (!verdict) return
+  // Read the shared copy first: another session may have changed it meanwhile.
   await sync($)
-  await update($, drift, () => ({ note: verdict.note, isByUser: verdict.isByUser }))
+  let isChanged = false
+  if (!verdict.isOnTrack && verdict.note) {
+    await update($, drift, () => ({ note: verdict.note, isByUser: verdict.isByUser }))
+    isChanged = true
+  }
+  // Only goals still open now: the main conversation may have ticked one meanwhile.
+  const current = await read($, intents)
+  const ticks = verdict.met.filter(m => current.some(one => one.id === m.id && !one.isMet))
+  if (ticks.length > 0) {
+    await update($, intents, l =>
+      l.map(one => {
+        const tick = ticks.find(m => m.id === one.id)
+        return tick && !one.isMet ? { ...one, isMet: true, evidence: tick.evidence, isAuto: true } : one
+      }),
+    )
+    // The main conversation reads the auto ticks beside the next prompt, to confirm or reopen.
+    await update($, isDirty, () => true)
+    isChanged = true
+    $.ui.toast(strings(await read($, lang)).toastAuto(ticks.map(m => m.id)))
+  }
+  if (!isChanged) return
   await save($)
+  await refreshTitle($)
 }
 
 /**
@@ -459,7 +553,15 @@ export const register: Register = on => {
   // The list reaches the model beside the next prompt after the person edits
   // their words, or when it was carried over from an earlier session.
   on('prompt.submit', async ($, e, next) => {
-    if (e.command || e.isMeta || !(await read($, isActive))) return next(e)
+    if (e.command || !(await read($, isActive))) return next(e)
+    if (e.isMeta) {
+      // A background task's (or subagent's) notification is a result arriving:
+      // the open goals ride beside it, as they do beside a finished tool call.
+      if (!/<task-notification\b/.test(e.text)) return next(e)
+      await sync($)
+      const note = resultNote(await read($, intents))
+      return next(note ? { ...e, context: [...(e.context ?? []), note] } : e)
+    }
     await sync($)
     if (!(await read($, isDirty))) return next(e)
     const block = `<intent-pane>\nThe intent pane for this worktree (the person's words are authoritative). Current list:\n${listText(
@@ -510,7 +612,7 @@ export const register: Register = on => {
     const list = await read($, intents)
     if (!list.some(one => one.id === id)) return { deny: `No goal with id "${id}".\n${listText(await read($, purpose), list)}` }
     if (!evidence) return { deny: 'evidence is required: name the check you ran and what it showed.' }
-    await update($, intents, l => l.map(one => (one.id === id ? { ...one, isMet: true, evidence } : one)))
+    await update($, intents, l => l.map(one => (one.id === id ? { ...one, isMet: true, evidence, isAuto: false } : one)))
     await save($)
     await refreshTitle($)
 
@@ -536,6 +638,7 @@ export const register: Register = on => {
         if (args.reopen === true) {
           next.isMet = false
           next.evidence = ''
+          next.isAuto = false
         }
         return next
       }),
@@ -546,12 +649,27 @@ export const register: Register = on => {
     return { result: listText(await read($, purpose), await read($, intents)) }
   })
 
-  // After each main-loop turn, a cheap model checks the turn against the list.
+  // A finished test, build or report reaches the model with the open goals
+  // beside it, so the pane is updated the moment the result arrives.
+  on('tool.call', async ($, e, next) => {
+    const call = e as unknown as Record<string, unknown>
+    if (String(call.tool).startsWith(`mcp__${P}__`) || fromSubagent(e) || !isResult(call)) return next(e)
+    const done = await next(e)
+    if (!(await read($, isActive)) || 'deny' in done) return done
+    await sync($)
+    const note = resultNote(await read($, intents))
+    if (!note) return done
+
+    return { ...done, context: [...(done.context ?? []), note] }
+  })
+
+  // After each main-loop turn, a cheap model checks the turn against the list:
+  // drift, and goals the turn's output shows passing that were left unticked.
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (!e.agentId && e.reason === 'answer' && (await read($, isActive))) {
       $.clock.after(0, () => {
-        void checkDrift($).catch(() => undefined)
+        void checkTurn($).catch(() => undefined)
       })
     }
 
@@ -583,6 +701,7 @@ export const register: Register = on => {
     const columns = e.props.bodyColumns ?? 40
     const open = list.filter(one => !one.isMet)
     const done = list.filter(one => one.isMet)
+    const autoCount = done.filter(one => one.isAuto).length
 
     const choose = async (next: Lang) => {
       await update($, lang, () => next)
@@ -869,7 +988,7 @@ export const register: Register = on => {
       <Box flexDirection="column">
         <Button
           key="done-toggle"
-          label={`✓ ${t.doneGroup(done.length)} ${isDoneShown ? '▾' : '▸'}`}
+          label={`✓ ${t.doneGroup(done.length)}${autoCount > 0 ? t.paren(t.autoCount(autoCount)) : ''} ${isDoneShown ? '▾' : '▸'}`}
           plain
           dimColor
           onPress={() => update($, isDoneOpen, v => !v)}
@@ -877,8 +996,9 @@ export const register: Register = on => {
         {isDoneShown &&
           done.map(one => (
             <Box key={`done-${one.id}`} flexDirection="column">
-              <Text color="green" wrap="wrap">
+              <Text color={one.isAuto ? 'yellow' : 'green'} wrap="wrap">
                 ✓ {one.id}. {one.mine || one.ai}
+                {one.isAuto ? t.paren(t.autoMark) : ''}
               </Text>
               <Text dimColor wrap="wrap">
                 {'  '}

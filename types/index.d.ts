@@ -10,6 +10,11 @@ export type Intent = {
   isMet: boolean
   /** What was run or observed when the check passed; '' while open. */
   evidence: string
+  /**
+   * Ticked by the end-of-turn check (Haiku) from the turn's tool output, not
+   * yet confirmed by the main conversation. Absent on lists saved before 0.8.
+   */
+  isAuto?: boolean
 }
 
 export type Purpose = { ai: string; mine: string }

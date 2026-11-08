@@ -654,3 +654,122 @@ test('a drift model another session picks is used here; an unknown saved value f
   expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('Opus')
   await pane.unmount()
 })
+
+test('a finished test run or report carries the open goals; other calls and finished lists do not', async ($, on) => {
+  engine(on)
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  await seed($)
+
+  const notes = async (call: Record<string, unknown>) => {
+    const done = await $.tool.call(call as never)
+    return 'context' in done ? (done.context ?? []) : []
+  }
+  const ran = await notes({ tool: 'Bash', command: 'xcodebuild test -scheme App' })
+  expect(ran.length).toBe(1)
+  expect(ran[0]).toContain('<intent-pane>')
+  expect(ran[0]).toContain('1. [open] 關掉 app 後草稿要保留 | check: DraftPersistTests 通過')
+  expect(ran[0]).toContain('mcp__intent-tracker__intent_met')
+  expect((await notes({ tool: 'Agent', prompt: 'review', description: 'review' })).length).toBe(1)
+
+  // Not a result: a plain command, a call started in the background, a subagent's own call.
+  expect((await notes({ tool: 'Bash', command: 'ls -la' })).length).toBe(0)
+  expect((await notes({ tool: 'Bash', command: 'npm test', run_in_background: true })).length).toBe(0)
+  expect((await notes({ tool: 'Agent', prompt: 'x', run_in_background: true })).length).toBe(0)
+  expect((await notes({ tool: 'Bash', command: 'npm test', agentId: 'sub-1' })).length).toBe(0)
+
+  // Every goal met (and confirmed): nothing to say.
+  await $.tool.call({ tool: MET, id: '1', evidence: 'ok' } as never)
+  await $.tool.call({ tool: MET, id: '2', evidence: 'ok' } as never)
+  expect((await notes({ tool: 'Bash', command: 'npm test' })).length).toBe(0)
+})
+
+test("a background task's notification carries the open goals; other hidden prompts do not", async ($, on) => {
+  engine(on)
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  await seed($)
+
+  const notified = await $.prompt.submit({
+    text: '<task-notification><status>completed</status><summary>tests passed</summary></task-notification>',
+    isMeta: true,
+  } as never)
+  expect('context' in notified && notified.context?.some(c => c.includes('2. [open] 不要動到同步'))).toBe(true)
+  const other = await $.prompt.submit({ text: 'some reminder', isMeta: true } as never)
+  expect('context' in other && (other.context ?? []).length).toBe(0)
+})
+
+test("after a turn, a goal its output shows passing is auto-ticked, shown, and confirmed by Claude", async ($, on) => {
+  const store = engine(on)
+  let toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(String((e as { text?: unknown }).text ?? e))
+    return { value: undefined }
+  })
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  let asked = ''
+  on('session.messages', () => ({
+    value: [
+      { role: 'user', text: '跑測試', toolUses: [] },
+      {
+        role: 'assistant',
+        text: '跑完了',
+        toolUses: [
+          {
+            tool_use_id: 't1',
+            tool: 'Bash',
+            input: { command: 'xcodebuild test -only-testing:DraftPersistTests' },
+            text: 'Test Suite DraftPersistTests passed\nExecuted 3 tests, with 0 failures',
+          },
+        ],
+      },
+    ],
+  }))
+  on('model.complete', (_, e) => {
+    asked = String((e as { prompt?: unknown }).prompt)
+    return {
+      value: {
+        isAnswered: true,
+        // "9" is no goal and "3" is unknown: both are dropped.
+        text: '{"onTrack": true, "met": [{"id": "1", "evidence": "DraftPersistTests：3 個測試 0 失敗"}, {"id": "9", "evidence": "x"}]}',
+        usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    }
+  })
+  on('turn.complete', () => ({ text: 'done' }))
+  await seed($)
+
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+
+  // The check read the tool's output, not only its input.
+  expect(asked).toContain('Executed 3 tests, with 0 failures')
+  const saved = store.get(`wt:${ROOT}`) as { intents: { id: string; isMet: boolean; isAuto?: boolean; evidence: string }[] }
+  expect(saved.intents[0]?.isMet).toBe(true)
+  expect(saved.intents[0]?.isAuto).toBe(true)
+  expect(saved.intents[0]?.evidence).toBe('DraftPersistTests：3 個測試 0 失敗')
+  expect(saved.intents[1]?.isMet).toBe(false)
+  expect(toasts.some(t => t.includes('自動勾選目標 1'))).toBe(true)
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
+  expect((await pane.find({ type: 'Button', key: 'done-toggle' }))?.text).toBe('✓ 已完成 1 項（1 項自動） ▸')
+  await pane.press({ key: 'done-toggle' })
+  expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.text).toBe('✓ 1. 關掉 app 後草稿要保留（自動・待確認）')
+  await pane.unmount()
+
+  // Claude reads the auto tick beside the next prompt and confirms it.
+  const next = await $.prompt.submit({ text: '繼續' } as never)
+  expect('context' in next && next.context?.some(c => c.includes('1. [met (auto, unconfirmed)]'))).toBe(true)
+  await $.tool.call({ tool: MET, id: '1', evidence: '我看過輸出：3/3 通過' } as never)
+  const confirmed = store.get(`wt:${ROOT}`) as typeof saved
+  expect(confirmed.intents[0]?.isAuto).toBe(false)
+  expect(confirmed.intents[0]?.evidence).toBe('我看過輸出：3/3 通過')
+})
+
+test('a list saved before auto ticks existed loads and draws as it did', async ($, on) => {
+  engine(on, { [`wt:${ROOT}`]: SAVED })
+  await start($)
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Button', key: 'done-toggle' }))?.text).toBe('✓ 已完成 1 項 ▸')
+  await pane.unmount()
+})
