@@ -1,61 +1,71 @@
 # intent-tracker
 
-A Claude Code mod that keeps a side pane, **Goals**, showing in plain words what the current work is for and which goals are met, so a long, technical session never loses sight of its original intent.
+A Claude Code mod: a side pane, **Goals**, that shows in plain words what you asked for in this session and how far it has got.
 
-- **Only what you asked for, in two layers**: a **request** is something you asked for, quoting your own words (the mod checks the quote against the conversation and refuses words you never said, so Claude's own ideas and technical steps stay off the list; a suggestion of Claude's joins only once you say yes). Claude breaks each request into **parts** you would recognise as pieces of it, in plain outcome words, so a one-line request still shows real progress. Progress counts parts; a request is done when all its parts are.
-- **Aligned marks**: every top-level item starts with a mark of the same width: `>` (or `v` when open) for an item with parts, pressed to show or fold its finished parts, and `-` for one without.
-- **Order and focus**: parts are kept in the order they will be done (labelled 1a, 1b, … under request 1; a part keeps its letter for good, so cancelling or moving one never relabels another; parts never use up a request number, so a new list counts 1, 2, 3 without gaps): ✓ done (green, folded under the request until you press its >), ● being worked on, ○ later. Several parts can be ● at once, each with its own *now: testing* / *now: investigating*: the session's own work shows on the parts Claude marked, and a subagent sent for a part shows on that part. Claude shapes parts by the kind of work (a bug: "it no longer happens" + "nothing else broke"; a refactor: "it behaves the same"; a question: "you have your answer"), and adds, edits, reorders or cancels them without asking; you get one notice per turn naming what changed.
-- **Follow-ups**: a small follow-up that refines an existing request ("also make it…") goes under that request as a part carrying your words, not as a new request; the request opens again until it is done. Only something that stands on its own becomes a new request.
-- **Recorded before the work**: each message you send reminds Claude to put it on the list before starting, so you see it open (○ → ● → ✓); if Claude starts working first, its first result carries a second reminder.
-- **Re-planning**: when the work shows a part no longer applies (the root cause or approach changed), it is marked *may be out of date* and Claude re-plans it. A changed request carries the parts that still apply over to the new one.
-- **Limits**: things that must not be touched or broken while the work is done ("don't touch sync") sit in their own section, *Rules to keep during the work*, as *kept so far* or *broken*, never ticked and never counted. A negative request about the result itself ("don't show X") is an ordinary goal.
-- **Changes of mind**: drop a request (✕ in the pane, or say so) and it is cancelled with your words as the reason, its parts with it; change what you want and the new request replaces the old one. Either can be restored by asking Claude.
-- **Latest only**: the pane shows the current state and nothing else: no history, no cancelled or replaced items, no before/after of an edit. ⋯ beside an item shows the words that asked for it and its evidence (finished items are listed without their evidence). (The record is kept for Claude, so a cancel can still be undone.)
-- **Your words, wherever you typed them**: a prompt, a message typed while Claude is working (read back from the transcript, so it still counts after a reload or resume), or your pick in a question dialog all count as your own words for a request's source; they are kept beside the worktree's list, so they still count after a restart. Too-short quotes ("ok", "好的"), fenced code, pasted material and other plugins' prompts never count.
-- **Now, live**: what is happening this instant, worked out from the actual tool calls with no model involved: while a tool runs, its stage (plan, investigate, build, test, fix after a failed test, review); between tools, *thinking*; *waiting for your answer* while a question is open or when Claude's reply ends by asking you something (until you reply), *waiting for your approval* while a plan is up; once the turn ends otherwise, nothing (a running subagent keeps showing its own). Shown beside each ● part, or under the progress bar when no part is marked. Work running beside the main loop (a test sent to the background, a subagent not sent for a part) is listed under *Also running* until it really ends: the background command until its completion notice (or until it is stopped, or its output file is gone; a command quiet for a while says how long), the subagent until it finishes. Every 5 seconds this is checked against Claude Code's own list of subagents, with no model involved, so nothing lingers after it ended and work started before a reload still shows.
-- **Your own words**: press ✎ beside the purpose or a goal to write it your way; it reaches Claude beside your next prompt and is treated as authoritative, and it leads where both are shown.
-- **Auto-tick with evidence**: Claude ticks a goal only after its check actually ran and passed, and records the evidence. A tick without evidence is refused.
-- **Drift warning**: after each turn a model of your choice (Haiku by default) checks the turn against the list and flags off-list work, with *add to list* / *ignore* buttons.
-- **Live progress, no upkeep**: when a test or build finishes, a subagent reports back, or a background task's notification arrives, the open goals ride along with the result (hidden from you), so Claude ticks or reopens a goal the moment its check runs, not when someone remembers.
-- **Observer**: a small model (Haiku by default) reads each result as it arrives and each finished turn. It only ever adds: it ticks a goal or part the output shows passing, but only when the key line it quotes is really in the output it read (a claim, or text planted in a page or file, ticks nothing; counted at once, tagged *seen in output*), marks a limit broken, and flags a part *may be out of date*; at the end of a turn it also records a request, a drop or a change of mind Claude missed, from your exact words only (tagged *needs confirming* until Claude confirms). It never unticks or edits the plan. Switch it off in the footer (*observer: on/off*, saved for every session): no model call, nothing leaves the session.
-- **Per worktree, one source of truth**: the list is saved per project root in one store shared by every session on this machine, so quitting the CLI and resuming shows the same pane, and a terminal session and a desktop-app session in the same worktree show the same list: a change in either (a tick, your own words, a drift note, the language) appears in the other within about two seconds and reaches its model beside the next prompt. Every change reads the shared copy first, so neither overwrites the other. When a worktree's folder is removed (its parent folder still present), its list is deleted at the next CLI start. A **⌫ Clear list** button (two presses) resets it.
+## The pane at a glance
 
-- **Language**: English by default. Pick 🌐 at the bottom of the pane: English, 中文, 日本語, or type your own. The choice is saved on your machine for every worktree and session. It sets the pane's labels (a custom language keeps English labels) and the language Claude writes the purpose, goals, checks, evidence and drift notes in. Text already written stays as it is until you press ↻.
+```
+Fix disappearing drafts                      ✎
+▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 1/3
+> ◐ 1. Drafts never disappear 1/3          ✎ ✕ ⋯
+    ● 1b. Drafts survive switching notebooks  now: testing
+    ○ 1c. Sync still works
+- ○ 2. The desktop app works too           ✎ ✕ ⋯
+Rules to keep during the work
+- 🛡 3. Don't touch sync                    ✎ ✕ ⋯
+Also running
+  Background command "unit suite": testing
+✓ 4 done ▸
+────────────────────────────────────────────
+2 min ago · goals Opus · drift Haiku · observer: on · 🌐 English
+```
+
+**Marks**
+
+| Mark | Meaning |
+|---|---|
+| `>` / `v` | the item has parts: press to show (`v`) or fold (`>`) its finished parts |
+| `-` | the item has no parts |
+| ○ | not done, not being worked on |
+| ● | being worked on now (several at once is fine) |
+| ◐ | a request with some of its parts done (`1/3`) |
+| ✓ | done (green); finished parts fold under their request |
+| 🛡 / ✗ | a rule to keep during the work: kept so far / broken |
+
+**Tags**
+
+| Tag | Meaning |
+|---|---|
+| *seen in output* | ticked from the actual output of a test or report |
+| *needs confirming* | written down from your words by the observer; Claude confirms it next |
+| *may be out of date* | the work suggests it no longer applies; Claude re-plans it |
+
+**Now** (beside a ● part, or under the progress bar): *plan*, *investigate*, *editing*, *building*, *test*, *fix* (editing after a failed test), *review*, *thinking* (between tools), *waiting for your answer*, *waiting for your approval*. Nothing shows once the turn is over. **Also running** lists background commands and subagents until they really end.
+
+**Buttons**: ✎ write an item in your own words (yours lead) · ✕ cancel it · ⋯ the words that asked for it and its evidence · ▶ start (build the list from the conversation) · ↻ refresh the AI side · ⌫ clear the list (two presses) · ✕ close (`/intents` reopens). Footer: the drift model (Haiku, Sonnet or Opus), *observer: on/off*, 🌐 language (English, 中文, 日本語 or your own).
+
+## How it works
+
+- **Only what you asked for.** A request must quote your own words; the mod checks the quote against the conversation (prompts, messages typed while Claude works, question-dialog answers), so Claude's own ideas and technical steps stay off the list. Claude breaks each request into plain-outcome parts; progress counts parts. A small follow-up goes under the request it refines.
+- **Recorded before the work.** Each message reminds Claude to put it on the list first, so you see it open before it is done.
+- **Live status, no model.** *Now* comes from the actual tool calls; background work is checked every 5 seconds.
+- **Observer.** A small model reads each result and each turn. It only adds: a tick when the line it quotes is really in the output, a broken rule, a *may be out of date* flag, and (at turn end) a request or change of mind Claude missed. Switch it off in the footer: no model call, nothing leaves the session.
+- **Latest only.** Cancelled and replaced items leave the pane; the record stays for Claude, so a cancel can be undone.
+- **Per worktree.** One shared list per project root, kept across sessions and kept in step between terminal and desktop sessions; concurrent changes are merged, not overwritten. A removed worktree's list is deleted at the next start.
 
 ## Where it runs
 
-In the terminal and in the desktop app's Code tab alike: a user-scope install loads in both, and the pane draws on either surface. Only in sessions a person can see. A headless session (`claude -p`, the SDK, automation that runs Claude without a REPL) gets no pane, no instructions, no tools and no drift check. Subagents and teammates cannot change the main conversation's list. An interactive session another tool opens for you in a terminal is an ordinary session and does get the pane.
+In the terminal and in the desktop app's Code tab, in sessions a person can see. A headless session (`claude -p`, the SDK) gets no pane, no instructions and no tools. Subagents and teammates cannot change the list.
 
 ## Install
-
-At the prompt of a terminal session:
 
 ```
 /plugin install intent-tracker --marketplace GordanY/claude-intent-panel
 ```
 
-Answer `y` to add the marketplace, then choose the **user** scope so every session in every repository has the pane.
+Answer `y` to add the marketplace and choose the **user** scope. From a shell: `claude plugin install intent-tracker --marketplace GordanY/claude-intent-panel`. In the desktop app: **+** next to the prompt box → **Plugins** → **Add marketplace** `GordanY/claude-intent-panel` → **Add plugin**.
 
-From a shell:
-
-```
-claude plugin install intent-tracker --marketplace GordanY/claude-intent-panel
-```
-
-In the desktop app, where `/plugin` does not run: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `GordanY/claude-intent-panel`, then **Add plugin**.
-
-Update later with `/plugin marketplace update claude-intent-panel`, then `/reload-plugins` or a new session.
-
-## Use
-
-- The pane opens by itself when the terminal is wide enough (about 144 columns); type `/intents` to open it at any width.
-- Close it with **✕ Close** at the bottom (or the pane's own close mark): once you close it, list changes no longer reopen it in that session. `/intents` brings it back.
-- The buttons sit in a light toolbar at the bottom of the pane: icon and text when the pane is wide enough, icon alone when it is narrow (▶ start, ↻ refresh, ⌫ clear, ✕ close).
-- An empty pane shows **▶ Start**: it asks Claude to build the purpose and goals from the conversation so far (useful in a session that was already running), ticking goals already verified.
-- **↻ Refresh AI content** asks Claude to redo the AI side (purpose, goal summaries, checks and ticks) from the current conversation; your own words are never changed.
-- The pane keeps the key information in view: the purpose in one line, a progress bar across the full width of the pane, any drift warning above the goals, then the open goals with their checks. Finished goals fold into one line (**✓ 3 done ▸**); open it for each goal and its evidence.
-- Below a divider at the very bottom, one light line of metadata: when the list last changed; **goals** and the model writing and ticking them (the session's own model, so it follows the session); **drift** and the model doing the drift check, which you can change: press its name and pick Haiku, Sonnet or Opus (saved on your machine for every worktree and session, like the language; Haiku is the cheapest); and 🌐 the language.
-- In the terminal, move focus into the pane with `ctrl+x tab` (or click) to type in a field.
+Update with `/plugin marketplace update claude-intent-panel`, then `/reload-plugins`. The pane opens by itself at about 144 columns; `/intents` opens it at any width. In the terminal, `ctrl+x tab` moves focus into the pane.
 
 ## Develop
 
