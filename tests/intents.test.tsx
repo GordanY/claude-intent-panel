@@ -595,3 +595,17 @@ test('a desktop-app session (SDK-hosted, no surface at start) turns on when the 
   expect((await pane.find({ type: 'Text', text: /面板出現/ }))?.text).toBe('○ 1. 面板出現')
   await pane.unmount()
 })
+
+test('the footer rule is box characters on the terminal and a 1px line on the desktop, never wrapping text', async ($, on) => {
+  engine(on)
+  await seed($)
+
+  const term = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await term.find({ type: 'Text', text: /^─+$/ }))?.text?.length).toBe(50)
+  await term.unmount()
+
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await desk.find({ type: 'Text', text: /─/ })).toBeUndefined()
+  expect(await desk.find({ type: 'Svg' })).toBeDefined()
+  await desk.unmount()
+})

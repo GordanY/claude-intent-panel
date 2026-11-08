@@ -159,6 +159,11 @@ function listText(p: Purpose, list: readonly Intent[]): string {
 
 const TOOLBAR_GAP = 2
 
+/** A hairline as wide as its slot, mid-grey at partial opacity so it reads on light and dark. */
+const RULE_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1" viewBox="0 0 2000 1" preserveAspectRatio="none">' +
+  '<rect width="2000" height="1" fill="#808080" fill-opacity="0.35"/></svg>'
+
 /** Terminal cells a label takes: East Asian wide characters count two. */
 function cells(text: string): number {
   let n = 0
@@ -539,6 +544,15 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Input } = $.ui.resolve(e)
+    const table = $.ui.resolve(e)
+    // The terminal draws a line of box characters sized to the pane's columns;
+    // a desktop (proportional font) wraps such a line, so it gets a 1px rule.
+    const rule =
+      e.surface === 'terminal' || !('Svg' in table) ? (
+        <Text dimColor>{'─'.repeat(Math.max(8, Math.min(e.props.bodyColumns ?? 40, 60)))}</Text>
+      ) : (
+        <table.Svg key="rule" source={RULE_SVG} alt="" height={1} />
+      )
     const list = await read($, intents)
     const p = await read($, purpose)
     const off = await read($, drift)
@@ -652,7 +666,7 @@ export const register: Register = on => {
     ].join(' · ')
     const footer = (
       <Box flexDirection="column">
-        <Text dimColor>{'─'.repeat(Math.max(8, Math.min(columns, 60)))}</Text>
+        {rule}
         <Box flexDirection="row" flexWrap="wrap">
           <Text dimColor wrap="wrap">{`${meta} · `}</Text>
           <Button
