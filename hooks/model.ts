@@ -282,7 +282,12 @@ function statusText(list: readonly Intent[], one: Intent): string {
     return met === parts.length ? `met (all ${met} parts)` : `open (${met}/${parts.length} parts met)`
   }
   if (one.isMet) return `met${one.isAuto ? ' (seen in output)' : ''}`
-  const flags = [one.isActive ? 'ACTIVE' : '', one.isStale ? 'STALE: may no longer apply, re-plan' : '', one.atEnd ? 'checked last' : ''].filter(Boolean).join(', ')
+  const flags = [
+    one.isActive ? 'ACTIVE' : '',
+    one.isStale ? 'STALE: may no longer apply, re-plan' : '',
+    one.atEnd ? 'checked last' : '',
+    partsOf(list, one.id).length === 0 && !isFalsifiable(one.check) ? 'VAGUE CHECK: rewrite it as something that could fail' : '',
+  ].filter(Boolean).join(', ')
   return `${one.isAuto ? `open (added${auto})` : 'open'}${flags ? ` [${flags}]` : ''}`
 }
 
@@ -427,7 +432,9 @@ export function briefText(p: Purpose, list: readonly Intent[]): string {
   const { met, total } = progress(list)
   const lines = [`Purpose: ${p.mine || p.ai || '(unset)'}`, `Progress: ${met}/${total} parts met. Details: intent_list.`]
   const state = (one: Intent) =>
-    (one.isMet ? 'met' : one.isStale ? 'stale' : one.isActive ? 'active' : one.isAuto ? 'open, auto' : 'open') + (one.atEnd && !one.isMet ? ', last' : '')
+    (one.isMet ? 'met' : one.isStale ? 'stale' : one.isActive ? 'active' : one.isAuto ? 'open, auto' : 'open') +
+    (one.atEnd && !one.isMet ? ', last' : '') +
+    (!one.isMet && partsOf(list, one.id).length === 0 && !isFalsifiable(one.check) ? ', VAGUE CHECK' : '')
   const live = list.filter(one => isRequest(one) && isLive(one))
   const finished: string[] = []
   for (const request of live) {
@@ -465,8 +472,22 @@ export function relevantOpen(list: readonly Intent[], max: number): { shown: Int
 
 /** Words that name nothing in particular: a line made only of these names no item. */
 const GENERIC = new Set(
-  'test tests testing pass passed passes passing fail failed failure failures ok okay all done check checks build built run runs ran suite total error errors success successful the and with for of in to'.split(' '),
+  'test tests testing pass passed passes passing fail failed failure failures ok okay all done check checks build built run runs ran suite total error errors success successful the and with for of in to it is works working work fine correct correctly properly good should must be as expected verify verified'.split(' '),
 )
+
+/** CJK words that name nothing in particular. */
+const GENERIC_CJK = ['對應', '相關', '測試', '通過', '檢查', '正常', '完成', '成功', '可以', '沒有', '問題', '全部', '結果', '確認', '運作', '功能', '應該']
+
+/**
+ * Whether a check could come out wrong: it names something particular to
+ * look at (a test, command, file or behaviour), not just "tests pass".
+ */
+export function isFalsifiable(check: string): boolean {
+  let rest = check.toLowerCase()
+  for (const word of GENERIC_CJK) rest = rest.split(word).join(' ')
+  const words = rest.split(/[^a-z0-9_.\u3400-\u9fff-]+/).filter(w => w && !GENERIC.has(w))
+  return weight(words.join('')) >= 4
+}
 
 /**
  * Whether a line names the item: shares a distinctive word with it (an

@@ -863,7 +863,7 @@ test("a request must quote the person; Claude's own ideas and technical steps ar
   // Loose matching: spacing and quote marks do not matter, an ellipsis joins two pieces.
   const quoted = await $.tool.call({
     tool: ADD,
-    intents: [{ summary: '草稿要保留', check: '測試', source: '「關掉 app 後…不要動到同步」' }],
+    intents: [{ summary: '草稿要保留', check: 'DraftPersistTests', source: '「關掉 app 後…不要動到同步」' }],
   } as never)
   expect('deny' in quoted).toBe(false)
 })
@@ -885,7 +885,7 @@ test('a request breaks into parts; progress counts the parts and the request is 
   const direct = await $.tool.call({ tool: MET, id: '1', evidence: '好了' } as never)
   expect('deny' in direct && (direct.deny ?? "").includes('has parts')).toBe(true)
   // A part never quotes; a part of a part is refused.
-  const nested = await $.tool.call({ tool: ADD, intents: [{ summary: '更細', check: 'x', parent: '1a' }] } as never)
+  const nested = await $.tool.call({ tool: ADD, intents: [{ summary: '更細', check: 'FixtureXTests', parent: '1a' }] } as never)
   expect('deny' in nested).toBe(true)
 
   await $.tool.call({ tool: MET, id: '1a', evidence: 'DraftPersistTests 3/3' } as never)
@@ -968,12 +968,12 @@ test('a dropped request is cancelled only on the person\'s words, takes its part
 test('a changed request replaces the old one, which stays on record (not in the pane) and links to the new', async ($, on) => {
   const store = engine(on)
   await start($)
-  await $.tool.call({ tool: ADD, intents: [{ summary: '草稿要保留', check: 'x', source: '關掉 app 後草稿要保留' }] } as never)
+  await $.tool.call({ tool: ADD, intents: [{ summary: '草稿要保留', check: 'FixtureXTests', source: '關掉 app 後草稿要保留' }] } as never)
   await $.tool.call({ tool: MET, id: '1', evidence: '3/3' } as never)
   ui.messages = [...ui.messages, { role: 'user', text: '改成：草稿要自動存到雲端', toolUses: [] }]
   await $.tool.call({
     tool: ADD,
-    intents: [{ summary: '草稿自動存雲端', check: 'y', source: '草稿要自動存到雲端', replaces: '1' }],
+    intents: [{ summary: '草稿自動存雲端', check: 'FixtureYTests', source: '草稿要自動存到雲端', replaces: '1' }],
   } as never)
 
   const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
@@ -1010,7 +1010,7 @@ test("after a turn where Claude already updated the list, the check adds nothing
   on('model.complete', () => ({
     value: {
       isAnswered: true,
-      text: JSON.stringify({ onTrack: true, add: [{ quote: '匯出 PDF 要能選頁', kind: 'goal', summary: '可選頁匯出', check: 'x' }] }),
+      text: JSON.stringify({ onTrack: true, add: [{ quote: '匯出 PDF 要能選頁', kind: 'goal', summary: '可選頁匯出', check: 'FixtureXTests' }] }),
       usage: USAGE,
     },
   }))
@@ -1047,16 +1047,16 @@ test("the person's dialog answers and the messages they type mid-turn count as t
     ],
   }))
   // The question Claude wrote is not the person's word; their pick is.
-  const question = await $.tool.call({ tool: ADD, intents: [{ summary: 'a', check: 'a', source: '要怎麼呈現' }] } as never)
+  const question = await $.tool.call({ tool: ADD, intents: [{ summary: 'a', check: 'FixtureATests', source: '要怎麼呈現' }] } as never)
   expect('deny' in question).toBe(true)
-  const answer = await $.tool.call({ tool: ADD, intents: [{ summary: 'b', check: 'b', source: '規劃階段＋分項歸屬' }] } as never)
+  const answer = await $.tool.call({ tool: ADD, intents: [{ summary: 'b', check: 'FixtureBTests', source: '規劃階段＋分項歸屬' }] } as never)
   expect('deny' in answer).toBe(false)
 
   // Typed over a running turn: never in the conversation's prompts, still theirs.
   await $.prompt.submit({ text: 'i regret, please dont leave any history in the pane', turnId: 't-running' } as never)
   const midTurn = await $.tool.call({
     tool: ADD,
-    intents: [{ summary: 'c', check: 'c', source: 'please dont leave any history in the pane' }],
+    intents: [{ summary: 'c', check: 'FixtureCTests', source: 'please dont leave any history in the pane' }],
   } as never)
   expect('deny' in midTurn).toBe(false)
 })
@@ -1217,7 +1217,7 @@ test('a changed request carries the parts that still apply to the new one', asyn
   ui.messages = [...ui.messages, { role: 'user', text: '改成：草稿要自動存到雲端', toolUses: [] }]
   await $.tool.call({
     tool: ADD,
-    intents: [{ summary: '草稿自動存雲端', check: 'y', source: '草稿要自動存到雲端', replaces: '1' }],
+    intents: [{ summary: '草稿自動存雲端', check: 'FixtureYTests', source: '草稿要自動存到雲端', replaces: '1' }],
   } as never)
   const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
   expect(saved.intents.filter(one => one.parent === '2' && !one.closed).length).toBe(3)
@@ -1273,7 +1273,7 @@ test("after a turn, the person's missed request, drop or change is recorded from
         // The second quote was never said: dropped.
         add: [
           { quote: '匯出 PDF 要能選頁', kind: 'goal', summary: '匯出 PDF 能選頁', check: '選 2 頁匯出得 2 頁' },
-          { quote: '順便升級套件', kind: 'goal', summary: '升級套件', check: 'x' },
+          { quote: '順便升級套件', kind: 'goal', summary: '升級套件', check: 'FixtureXTests' },
         ],
       }),
       usage: USAGE,
@@ -1319,11 +1319,11 @@ test('a message typed mid-turn still counts as the person\'s words after a reloa
   }))
   const added = await $.tool.call({
     tool: ADD,
-    intents: [{ summary: '只顯示最新', check: 'x', source: 'please dont leave any history in the pane, just always show the latest' }],
+    intents: [{ summary: '只顯示最新', check: 'FixtureXTests', source: 'please dont leave any history in the pane, just always show the latest' }],
   } as never)
   expect('deny' in added).toBe(false)
   // The wrapper sentence is the engine's, not the person's.
-  const wrapper = await $.tool.call({ tool: ADD, intents: [{ summary: 'y', check: 'y', source: 'This is how Claude Code surfaces messages' }] } as never)
+  const wrapper = await $.tool.call({ tool: ADD, intents: [{ summary: 'y', check: 'FixtureYTests', source: 'This is how Claude Code surfaces messages' }] } as never)
   expect('deny' in wrapper).toBe(true)
 })
 
@@ -1457,7 +1457,7 @@ test("a small follow-up to a request goes under it with the person's words, and 
   await $.tool.call({ tool: MET, id: '1', evidence: '3/3' } as never)
   ui.messages = [...ui.messages, { role: 'user', text: '草稿也要在當機後保留', toolUses: [] }]
 
-  const invented = await $.tool.call({ tool: ADD, intents: [{ summary: 'x', check: 'x', parent: '1', source: '順便加快' }] } as never)
+  const invented = await $.tool.call({ tool: ADD, intents: [{ summary: 'x', check: 'FixtureXTests', parent: '1', source: '順便加快' }] } as never)
   expect('deny' in invented).toBe(true)
   await $.tool.call({ tool: ADD, intents: [{ summary: '當機後草稿還在', check: 'CrashTests', parent: '1', source: '草稿也要在當機後保留' }] } as never)
 
@@ -1530,9 +1530,9 @@ test('a wrong id is refused with a short key of the items, and an add says which
   const added = await $.tool.call({
     tool: ADD,
     intents: [
-      { summary: '草稿要保留', check: 'x', source: '關掉 app 後草稿要保留' },
-      { summary: '關掉還在', check: 'y', parent: '+1' },
-      { summary: '切換還在', check: 'z', parent: '+1' },
+      { summary: '草稿要保留', check: 'FixtureXTests', source: '關掉 app 後草稿要保留' },
+      { summary: '關掉還在', check: 'FixtureYTests', parent: '+1' },
+      { summary: '切換還在', check: 'FixtureZTests', parent: '+1' },
     ],
   } as never)
   expect('result' in added && String(added.result).startsWith('Added: 1, 1a, 1b')).toBe(true)
@@ -1546,7 +1546,7 @@ test('finished parts fold under their request (▸ opens them) and show green; r
   await $.tool.call({ tool: MET, id: '1a', evidence: 'ok' } as never)
   // The next request is 2: its parts did not use up numbers.
   ui.messages = [...ui.messages, { role: 'user', text: '桌面版也要能用', toolUses: [] }]
-  await $.tool.call({ tool: ADD, intents: [{ summary: '桌面版可用', check: 'x', source: '桌面版也要能用' }] } as never)
+  await $.tool.call({ tool: ADD, intents: [{ summary: '桌面版可用', check: 'FixtureXTests', source: '桌面版也要能用' }] } as never)
   expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.some(one => one.id === '2' && !one.parent)).toBe(true)
 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -1574,8 +1574,8 @@ test("Claude recording words the observer already recorded takes that entry's pl
       text: JSON.stringify({
         onTrack: true,
         add: [
-          { quote: '完成的分項要變綠色', kind: 'goal', summary: '分項變綠', check: 'x' },
-          { quote: '匯出要能選頁', kind: 'goal', summary: '選頁匯出', check: 'y' },
+          { quote: '完成的分項要變綠色', kind: 'goal', summary: '分項變綠', check: 'FixtureXTests' },
+          { quote: '匯出要能選頁', kind: 'goal', summary: '選頁匯出', check: 'FixtureYTests' },
         ],
       }),
       usage: USAGE,
@@ -1586,7 +1586,7 @@ test("Claude recording words the observer already recorded takes that entry's pl
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
   await ui.clock.settle()
 
-  await $.tool.call({ tool: ADD, intents: [{ summary: '完成的分項變綠', check: 'z', parent: '1', source: '完成的分項要變綠色' }] } as never)
+  await $.tool.call({ tool: ADD, intents: [{ summary: '完成的分項變綠', check: 'FixtureZTests', parent: '1', source: '完成的分項要變綠色' }] } as never)
   let saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
   expect(saved.intents.find(one => one.ai === '分項變綠')?.closed).toMatchObject({ as: 'replaced', replacedBy: 'p1' })
   // Not the person's word, but an unconfirmed auto entry: Claude may withdraw it.
@@ -1601,7 +1601,7 @@ test('every top-level item starts with a mark of the same width: ">" (or "v" whe
   engine(on)
   await seedParts($)
   ui.messages = [...ui.messages, { role: 'user', text: '桌面版也要能用', toolUses: [] }]
-  await $.tool.call({ tool: ADD, intents: [{ summary: '桌面版可用', check: 'x', source: '桌面版也要能用' }] } as never)
+  await $.tool.call({ tool: ADD, intents: [{ summary: '桌面版可用', check: 'FixtureXTests', source: '桌面版也要能用' }] } as never)
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await pane.find({ type: 'Button', key: 'fold-1' }))?.text).toBe('>')
   // Request 2 has no parts: "-", not a button.
@@ -1693,13 +1693,13 @@ test('"+N" counts every item given; one pointing at no request is refused', asyn
     tool: ADD,
     intents: [
       { summary: '', check: '' },
-      { summary: '草稿要保留', check: 'x', source: '關掉 app 後草稿要保留' },
-      { summary: '關掉還在', check: 'y', parent: '+2' },
+      { summary: '草稿要保留', check: 'FixtureXTests', source: '關掉 app 後草稿要保留' },
+      { summary: '關掉還在', check: 'FixtureYTests', parent: '+2' },
     ],
   } as never)
   const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
   expect(saved.intents.find(one => one.ai === '關掉還在')?.parent).toBe('1')
-  const wrong = await $.tool.call({ tool: ADD, intents: [{ summary: 'z', check: 'z', parent: '+5' }] } as never)
+  const wrong = await $.tool.call({ tool: ADD, intents: [{ summary: 'z', check: 'FixtureZTests', parent: '+5' }] } as never)
   expect('deny' in wrong && String(wrong.deny).includes('points at no request')).toBe(true)
 })
 
@@ -1728,12 +1728,12 @@ test("only the person's own writing counts: too-short quotes, fenced code, paste
   }))
   const tries = ['好的', 'fix the build pipeline', 'please add dark mode support']
   for (const source of tries) {
-    const r = await $.tool.call({ tool: ADD, intents: [{ summary: 'x', check: 'x', source }] } as never)
+    const r = await $.tool.call({ tool: ADD, intents: [{ summary: 'x', check: 'FixtureXTests', source }] } as never)
     expect('deny' in r).toBe(true)
   }
   // Submitted by another plugin, not typed by the person.
   await $.prompt.submit({ text: 'make the export twice as fast', origin: { kind: 'plugin', name: 'x' } } as never)
-  const plugin = await $.tool.call({ tool: ADD, intents: [{ summary: 'y', check: 'y', source: 'make the export twice as fast' }] } as never)
+  const plugin = await $.tool.call({ tool: ADD, intents: [{ summary: 'y', check: 'FixtureYTests', source: 'make the export twice as fast' }] } as never)
   expect('deny' in plugin).toBe(true)
 })
 
@@ -1813,8 +1813,8 @@ test('a subagent links only to the part it was named for: short words link nothi
 test('the list Claude reads carries only the latest closed items, with a count of the rest', async ($, on) => {
   engine(on)
   await start($)
-  const many = Array.from({ length: 7 }, (_, n) => ({ summary: `分項 ${n}`, check: 'x', parent: '1' }))
-  await $.tool.call({ tool: ADD, intents: [{ summary: '草稿要保留', check: 'x', source: '關掉 app 後草稿要保留' }] } as never)
+  const many = Array.from({ length: 7 }, (_, n) => ({ summary: `分項 ${n}`, check: 'FixtureXTests', parent: '1' }))
+  await $.tool.call({ tool: ADD, intents: [{ summary: '草稿要保留', check: 'FixtureXTests', source: '關掉 app 後草稿要保留' }] } as never)
   await $.tool.call({ tool: ADD, intents: many } as never)
   for (const label of ['1a', '1b', '1c', '1d', '1e', '1f', '1g']) await $.tool.call({ tool: REVISE, id: label, cancel: '不需要' } as never)
   const listed = await $.tool.call({ tool: 'mcp__intent-tracker__intent_list' } as never)
@@ -1830,7 +1830,7 @@ test("a cut name never splits an emoji, and the person's words still count after
   await start($)
   // A fresh process: no messages, only the words kept beside the list.
   ui.messages = []
-  const r = await $.tool.call({ tool: ADD, intents: [{ summary: '可選頁匯出', check: 'x', source: '請把匯出改成可以選頁' }] } as never)
+  const r = await $.tool.call({ tool: ADD, intents: [{ summary: '可選頁匯出', check: 'FixtureXTests', source: '請把匯出改成可以選頁' }] } as never)
   expect('deny' in r).toBe(false)
 
   await $.agent.spawn({ prompt: 'x', description: '🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍🔍' })
@@ -1868,14 +1868,14 @@ test('a result note lists the parts being worked on first, at most eight, with a
   engine(on)
   on('tool.call', () => ({ result: 'ok' }) as never)
   await start($)
-  const parts = Array.from({ length: 11 }, (_, n) => ({ summary: `分項 ${n + 1}`, check: `檢查 ${n + 1}`, parent: '+1' }))
-  await $.tool.call({ tool: ADD, intents: [{ summary: '草稿要保留', check: 'x', source: '關掉 app 後草稿要保留' }, ...parts] } as never)
+  const parts = Array.from({ length: 11 }, (_, n) => ({ summary: `分項 ${n + 1}`, check: `Check${n + 1}Tests`, parent: '+1' }))
+  await $.tool.call({ tool: ADD, intents: [{ summary: '草稿要保留', check: 'FixtureXTests', source: '關掉 app 後草稿要保留' }, ...parts] } as never)
   await $.tool.call({ tool: REVISE, id: '1k', active: true } as never)
   const done = await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
   const note = ('context' in done ? (done.context ?? []) : []).find(c => c.includes('A result arrived')) ?? ''
   const lines = note.split('\n').filter(x => /^1[a-k]\./.test(x))
   expect(lines.length).toBe(8)
-  expect(lines[0]).toBe('1k. [active] 分項 11 | check: 檢查 11')
+  expect(lines[0]).toBe('1k. [active] 分項 11 | check: Check11Tests')
   expect(note).toContain('(+3 more open: intent_list)')
 })
 
@@ -1883,9 +1883,9 @@ test('a short reply counts only as a whole message; markdown emphasis does not b
   engine(on)
   await start($)
   setMessages(() => ({ value: [{ role: 'user', text: 'pick 1', toolUses: [] }, { role: 'user', text: '**可以請主對話**把檢查方式寫成具體的測試名稱', toolUses: [] }] }))
-  const whole = await $.tool.call({ tool: ADD, intents: [{ summary: 'x', check: 'x', source: 'pick 1' }] } as never)
+  const whole = await $.tool.call({ tool: ADD, intents: [{ summary: 'x', check: 'FixtureXTests', source: 'pick 1' }] } as never)
   expect('deny' in whole).toBe(false)
-  const emphasis = await $.tool.call({ tool: ADD, intents: [{ summary: 'y', check: 'y', source: '可以請主對話把檢查方式寫成具體的測試名稱' }] } as never)
+  const emphasis = await $.tool.call({ tool: ADD, intents: [{ summary: 'y', check: 'FixtureYTests', source: '可以請主對話把檢查方式寫成具體的測試名稱' }] } as never)
   expect('deny' in emphasis).toBe(false)
 })
 
@@ -1904,7 +1904,7 @@ test('the observer does not tick from a suite-wide summary line: the quoted line
   await $.tool.call({
     tool: ADD,
     intents: [
-      { summary: '草稿要保留', check: '對應測試通過', source: '關掉 app 後草稿要保留' },
+      { summary: '草稿要保留', check: 'DraftPersistTests 通過', source: '關掉 app 後草稿要保留' },
       { summary: '同步照常', check: 'SyncUntouchedTests 通過', source: '不要動到同步' },
     ],
   } as never)
@@ -1960,4 +1960,39 @@ test('a goal true from the start ("sync stays untouched") is checked last: nobod
   await $.tool.call({ tool: MET, id: '1a', evidence: 'DraftPersistTests 3/3' } as never)
   const last = await $.tool.call({ tool: MET, id: '1b', evidence: 'git diff 不含 Sync/' } as never)
   expect('deny' in last).toBe(false)
+})
+
+test('every check must be verifiable and falsifiable: vague ones are refused, skipped by the observer, and old ones flagged for a rewrite', async ($, on) => {
+  const store = engine(on, {
+    [`wt:${ROOT}`]: {
+      purpose: { ai: '修好草稿', mine: '' },
+      intents: [{ id: '1', ai: '草稿要保留', mine: '', check: '對應測試通過', isMet: false, evidence: '', source: '關掉 app 後草稿要保留' }],
+      drift: null,
+      updatedAt: 1,
+    },
+  })
+  on('ui.toast', () => ({ value: undefined }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({
+    value: { isAnswered: true, text: JSON.stringify({ onTrack: true, add: [{ quote: '桌面版也要能用', summary: '桌面版可用', check: '正常運作' }] }), usage: USAGE },
+  }))
+  await start($)
+  ui.messages = [...ui.messages, { role: 'user', text: '桌面版也要能用', toolUses: [] }]
+  for (const check of ['tests pass', '對應測試通過', '正常', 'works']) {
+    const r = await $.tool.call({ tool: ADD, intents: [{ summary: '桌面版可用', check, source: '桌面版也要能用' }] } as never)
+    expect('deny' in r && String(r.deny).includes('falsifiable')).toBe(true)
+  }
+  const vagueRevise = await $.tool.call({ tool: REVISE, id: '1', check: '測試通過' } as never)
+  expect('deny' in vagueRevise).toBe(true)
+  // The old vague check is flagged for Claude to rewrite.
+  const listed = await $.tool.call({ tool: 'mcp__intent-tracker__intent_list' } as never)
+  expect('result' in listed && String(listed.result).includes('VAGUE CHECK')).toBe(true)
+  // The observer does not add a request whose check could not fail.
+  setMessages(() => ({ value: [{ role: 'user', text: '桌面版也要能用', toolUses: [] }, { role: 'assistant', text: '好', toolUses: [] }] }))
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+  expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.some(one => one.ai === '桌面版可用')).toBe(false)
+  // A specific check is fine.
+  const ok = await $.tool.call({ tool: ADD, intents: [{ summary: '桌面版可用', check: '桌面版開啟後面板顯示清單', source: '桌面版也要能用' }] } as never)
+  expect('deny' in ok).toBe(false)
 })

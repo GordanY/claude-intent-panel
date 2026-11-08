@@ -11,6 +11,7 @@ import {
   endsWithQuestion,
   entry,
   idKey,
+  isFalsifiable,
   itemLines,
   mentions,
   labelOf,
@@ -322,7 +323,7 @@ const instructions = (language: string) => `# Intent pane (intent-tracker mod)
 A pane shows the person, in plain ${language}, what they asked for in this worktree and how far it has got. Keep it accurate and quiet (never narrate these calls); write all pane text in ${language}, no jargon in summaries.
 - REQUESTS: only what the person asked for, each with \`source\` = their exact words (verified; never your ideas or technical steps; your suggestion joins only after their yes). Every request is a goal, an outcome. "Don't do X" / "don't touch X" is the goal "X stays untouched" with \`atEnd: true\` (a part of the request it protects, or a request of its own): it is true from the start, so it can be ticked only once the rest is done, its check run then (e.g. the diff leaves X alone).
 - PARTS (\`parent\`): break each goal into plain outcomes the person would recognise, never steps. Bug: "no longer happens" + "nothing else broke"; feature: each visible behaviour; refactor: "behaves the same"; question: "you have your answer"; release: each irreversible outcome. A small follow-up refining a request is a part with its own \`source\`. Keep parts in order (\`position\`); mark the ones being worked on \`active: true\` (any number); give \`agent: "<words of its description>"\` when a subagent works on one. Change parts freely; the person gets a notice.
-- CHECKS name the specific proof (a test name, a command, a behaviour to see), never just "tests pass".
+- CHECKS must be verifiable and falsifiable: the specific proof that could come out wrong (a test name, a command and its expected output, a behaviour to see), never just "tests pass" or "works". A goal true from the start is checked last.
 - RECORD FIRST: when a message asks for something, record it before starting the work. A question is not a request.
 - TICK with ${TOOL('intent_met')} only after the check really ran and passed, with evidence; \`reopen\` if later broken.
 - CHANGES OF MIND: dropped → ${TOOL('intent_revise')} \`cancel\` with their words; changed → a new request with \`replaces\`. A STALE part, or a changed approach: re-plan at once.
@@ -792,7 +793,7 @@ async function checkTurn($: EngineInterface, durationMs = 0, mode: 'turn' | 'res
       `"met": [{"id": "<id>", "quote": "<the key line, copied exactly from the tool output above>", "evidence": "<one short line in ${language} naming that output>"}], ` +
       `"stale": [{"id": "<part id>", "why": "<one short line in ${language}>"}]` +
       (isTurn
-        ? `, "add": [{"quote": "<their exact words>", "atEnd": <true for "X stays untouched", which is true from the start and checked last>, "parent": "<request id, only when it is a small follow-up refining that request>", "summary": "<one plain sentence in ${language}, no jargon>", "check": "<how to prove it, in ${language}>"}], ` +
+        ? `, "add": [{"quote": "<their exact words>", "atEnd": <true for "X stays untouched", which is true from the start and checked last>, "parent": "<request id, only when it is a small follow-up refining that request>", "summary": "<one plain sentence in ${language}, no jargon>", "check": "<the specific test, command or behaviour that would prove it and could fail, in ${language}>"}], ` +
           '"cancel": [{"id": "<request id>", "quote": "<their exact words>"}], ' +
           `"replace": [{"id": "<request id>", "quote": "<their exact words>", "summary": "<the new request, plain ${language}>", "check": "<how to prove it>"}]`
         : '') +
@@ -856,7 +857,7 @@ async function checkTurn($: EngineInterface, durationMs = 0, mode: 'turn' | 'res
   ]
   const adds = verdict.add.filter(m => {
     const quote = normalize(m.quote)
-    return isHeard(m.quote) && !known.some(k => k && (k.includes(quote) || quote.includes(k)))
+    return isHeard(m.quote) && isFalsifiable(m.check) && !known.some(k => k && (k.includes(quote) || quote.includes(k)))
   })
 
   if (ticks.length + stales.length + cancels.length + replaces.length + adds.length > 0) {
@@ -1099,6 +1100,11 @@ export const register: Register = on => {
     const problems: string[] = []
     items.forEach((item, n) => {
       const at = `item ${n + 1} ("${item.summary.slice(0, 40)}")`
+      if (!isFalsifiable(item.check)) {
+        problems.push(
+          `${at}: its check must be verifiable and falsifiable: name the test, command or behaviour that could come out wrong (e.g. "DraftPersistTests passes", "the pane shows ✓ in green"), not "${item.check || '(empty)'}".`,
+        )
+      }
       if (item.parent) {
         if (!isRequestId(parentOf(item.parent))) {
           problems.push(
@@ -1242,6 +1248,9 @@ export const register: Register = on => {
         return { deny: `Item ${id} is ${one.closed.as}: restore it first (restore: true).` }
       }
       if (args.restore === true && !one.closed) return { deny: `Item ${id} is not closed.` }
+      if (str(args.check) && !isFalsifiable(str(args.check))) {
+        return { deny: `The check must be verifiable and falsifiable: name the test, command or behaviour that could come out wrong, not "${str(args.check)}".` }
+      }
       const isPartOnly = args.active !== undefined || args.agent !== undefined || args.position !== undefined
       if (isPartOnly && (isRequest(one) || one.closed)) return { deny: 'active, agent and position are for live parts.' }
       // A request the observer recorded (unconfirmed) Claude may withdraw; any other only on the person's word.
