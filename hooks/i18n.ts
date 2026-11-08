@@ -96,21 +96,15 @@ export type Strings = {
   autoCount: (n: number) => string
   toastAuto: (parts: readonly string[]) => string
   autoTicked: (ids: readonly string[]) => string
-  autoBroken: (ids: readonly string[]) => string
   autoCancelled: (ids: readonly string[]) => string
   autoReplaced: (ids: readonly string[]) => string
   autoAdded: (n: number) => string
-  limits: string
-  ruleBroken: string
-  toastRuleBroken: (text: string) => string
   partsChanged: (what: 'added' | 'edited' | 'cancelled' | 'moved' | 'restored', ids: readonly string[]) => string
   toastTurn: (notes: readonly string[]) => string
   autoStale: (ids: readonly string[]) => string
   nowLabel: string
   staleLabel: string
   seenInOutput: string
-  holding: string
-  brokenLabel: string
   confirmCancelItem: string
   cancelYes: string
   keep: string
@@ -183,13 +177,9 @@ const EN: Strings = {
   autoCount: n => `${n} seen in output`,
   toastAuto: parts => `Observer: ${parts.join('; ')}`,
   autoTicked: ids => `ticked ${ids.join(', ')}`,
-  autoBroken: ids => `marked limit ${ids.join(', ')} broken`,
   autoCancelled: ids => `cancelled ${ids.join(', ')}`,
   autoReplaced: ids => `replaced ${ids.join(', ')}`,
   autoAdded: n => `added ${n} request${n === 1 ? '' : 's'}`,
-  limits: 'Rules to keep during the work',
-  ruleBroken: 'Rule broken',
-  toastRuleBroken: text => `Rule broken: ${text}`,
   partsChanged: (what, ids) =>
     `Claude ${{ added: 'added', edited: 'edited', cancelled: 'cancelled', moved: 'moved', restored: 'restored' }[what]} ${ids.map(x => `"${x}"`).join(', ')}`,
   toastTurn: notes => notes.join('; '),
@@ -197,8 +187,6 @@ const EN: Strings = {
   nowLabel: 'now',
   staleLabel: 'may be out of date',
   seenInOutput: 'seen in output',
-  holding: 'kept so far',
-  brokenLabel: 'Broken',
   confirmCancelItem: 'Cancel this item?',
   cancelYes: 'Cancel it',
   keep: 'Keep',
@@ -222,7 +210,7 @@ const EN: Strings = {
     restored: 'restored',
     broken: 'broken',
     holding: 'holding again',
-  },
+    },
   stage: { plan: 'Plan', investigate: 'Investigate', build: 'Editing', test: 'Test', fix: 'Fix', review: 'Review', think: 'Thinking', run: 'Running', compile: 'Building', ask: 'Waiting for your answer', approve: 'Waiting for your approval' },
   alongside: 'Also running',
   observerToggle: on => `observer ${on ? 'on' : 'off'}`,
@@ -230,7 +218,7 @@ const EN: Strings = {
   subagent: 'Subagent',
   backgroundCommand: 'Background command',
   startPrompt: (t, lang) =>
-    `(Goals pane) From the conversation so far, set out what this work is for and its goals: use ${t.add} to set a one-line plain-language purpose and the requests I actually made (each quoting my own words as its source; limits I set count too), each goal request broken into plain parts I would recognise, each with a concrete check; tick goals already verified in the conversation with ${t.met} and the evidence. ` +
+    `(Goals pane) From the conversation so far, set out what this work is for and its goals: use ${t.add} to set a one-line plain-language purpose and the requests I actually made (each quoting my own words as its source), each goal request broken into plain parts I would recognise, each with a concrete check; tick goals already verified in the conversation with ${t.met} and the evidence. ` +
     `Use only what actually happened in the conversation; if it is not yet clear what we are doing, just ask me. Write everything in ${lang}. When done, tell me in a sentence or two.`,
   refreshPrompt: (t, lang) =>
     `(Goals pane) From the current conversation, refresh the AI content of the goals pane: the purpose and each goal's plain-language summary, check and tick state. ` +
@@ -287,13 +275,9 @@ const ZH: Strings = {
   autoCount: n => `${n} 項從輸出看到`,
   toastAuto: parts => `觀察者：${parts.join('；')}`,
   autoTicked: ids => `勾選目標 ${ids.join('、')}`,
-  autoBroken: ids => `標記限制 ${ids.join('、')} 被破壞`,
   autoCancelled: ids => `取消 ${ids.join('、')}`,
   autoReplaced: ids => `取代 ${ids.join('、')}`,
   autoAdded: n => `加入 ${n} 項需求`,
-  limits: '過程中要遵守的限制',
-  ruleBroken: '規則被破壞',
-  toastRuleBroken: text => `規則被破壞：${text}`,
   partsChanged: (what, ids) =>
     `Claude ${{ added: '新增', edited: '修改', cancelled: '取消', moved: '移動', restored: '還原' }[what]}了「${ids.join('」「')}」`,
   toastTurn: notes => notes.join('；'),
@@ -301,8 +285,6 @@ const ZH: Strings = {
   nowLabel: '現在',
   staleLabel: '可能過時',
   seenInOutput: '從輸出看到',
-  holding: '目前有遵守',
-  brokenLabel: '被破壞',
   confirmCancelItem: '取消這一項？',
   cancelYes: '取消它',
   keep: '保留',
@@ -326,7 +308,7 @@ const ZH: Strings = {
     restored: '還原',
     broken: '被破壞',
     holding: '恢復守住',
-  },
+    },
   stage: { plan: '規劃', investigate: '調查', build: '實作', test: '測試', fix: '修正', review: '審查', think: '思考中', run: '執行中', compile: '建置', ask: '等你回答', approve: '等你核准計畫' },
   alongside: '同時進行',
   observerToggle: on => `觀察者：${on ? '開' : '關'}`,
@@ -335,7 +317,7 @@ const ZH: Strings = {
   backgroundCommand: '背景指令',
   startPrompt: (t, lang) =>
     '（目標面板）請依目前為止的對話，整理這次工作的原意和目標：' +
-    `用 ${t.add} 設定一行白話的原意，和我真正提出的需求（每項以我的原話作 source；我設的限制也算），每個需求再拆成我看得懂的白話分項，每項附具體的檢查方式；` +
+    `用 ${t.add} 設定一行白話的原意，和我真正提出的需求（每項以我的原話作 source），每個需求再拆成我看得懂的白話分項，每項附具體的檢查方式；` +
     `對話裡已經確實跑過、也通過檢查的目標，再用 ${t.met} 補上依據打勾。` +
     `只根據對話裡真的發生過的事；如果對話還看不出要做什麼，就直接問我。全部用${lang}寫。整理完用一兩句話告訴我。`,
   refreshPrompt: (t, lang) =>
@@ -393,13 +375,9 @@ const JA: Strings = {
   autoCount: n => `${n} 件は出力で確認`,
   toastAuto: parts => `オブザーバー：${parts.join('；')}`,
   autoTicked: ids => `目標 ${ids.join('、')} をチェック`,
-  autoBroken: ids => `制約 ${ids.join('、')} を破れたと記録`,
   autoCancelled: ids => `${ids.join('、')} を取り消し`,
   autoReplaced: ids => `${ids.join('、')} を置き換え`,
   autoAdded: n => `依頼を ${n} 件追加`,
-  limits: '作業中に守るルール',
-  ruleBroken: 'ルールが破られた',
-  toastRuleBroken: text => `ルールが破られた：${text}`,
   partsChanged: (what, ids) =>
     `Claude が「${ids.join('」「')}」を${{ added: '追加', edited: '編集', cancelled: '取り消し', moved: '移動', restored: '復元' }[what]}しました`,
   toastTurn: notes => notes.join('；'),
@@ -407,8 +385,6 @@ const JA: Strings = {
   nowLabel: '現在',
   staleLabel: '古い可能性あり',
   seenInOutput: '出力で確認',
-  holding: 'ここまで守られている',
-  brokenLabel: '破られた',
   confirmCancelItem: 'この項目を取り消しますか？',
   cancelYes: '取り消す',
   keep: '残す',
@@ -432,7 +408,7 @@ const JA: Strings = {
     restored: '復元',
     broken: '破られた',
     holding: '再び維持',
-  },
+    },
   stage: { plan: '計画', investigate: '調査', build: '実装', test: 'テスト', fix: '修正', review: 'レビュー', think: '思考中', run: '実行中', compile: 'ビルド', ask: 'あなたの回答待ち', approve: '承認待ち' },
   alongside: '並行中',
   observerToggle: on => `オブザーバー：${on ? 'オン' : 'オフ'}`,
@@ -441,7 +417,7 @@ const JA: Strings = {
   backgroundCommand: 'バックグラウンド処理',
   startPrompt: (t, lang) =>
     '（目標パネル）これまでの会話から、この作業の目的と目標を整理してください：' +
-    `${t.add} で一行の平易な目的と、私が実際に出した依頼（それぞれ私の言葉を source として引用。私が決めた制約も含む）を設定し、各依頼を私に分かる平易な分項に分けて（それぞれ具体的な確認方法つき）、会話の中で実際に確認済みの目標は ${t.met} で根拠をつけてチェックしてください。` +
+    `${t.add} で一行の平易な目的と、私が実際に出した依頼（それぞれ私の言葉を source として引用）を設定し、各依頼を私に分かる平易な分項に分けて（それぞれ具体的な確認方法つき）、会話の中で実際に確認済みの目標は ${t.met} で根拠をつけてチェックしてください。` +
     `会話で実際に起きたことだけに基づき、まだ何をするか分からなければ私に聞いてください。すべて${lang}で書いてください。終わったら一、二文で教えてください。`,
   refreshPrompt: (t, lang) =>
     '（目標パネル）現在の会話に基づいて、目標パネルの AI 内容（目的、各目標の平易な要約、確認方法、チェック状態）を更新してください。' +

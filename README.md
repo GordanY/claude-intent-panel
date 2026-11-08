@@ -28,7 +28,6 @@ Also running
 | ● | being worked on now (several at once is fine) |
 | ◐ | a request with some of its parts done (`1/3`) |
 | ✓ | done (green); finished parts fold under their request |
-| ✗ (red box) | a rule you set for the work ("don't touch sync") was broken; rules that hold are not shown |
 
 **Tags**
 
@@ -44,11 +43,10 @@ Also running
 
 ## How it works
 
-- **Only what you asked for.** A request must quote your own words; the mod checks the quote against the conversation (prompts, messages typed while Claude works, question-dialog answers), so Claude's own ideas and technical steps stay off the list. Claude breaks each request into plain-outcome parts; progress counts parts. A small follow-up goes under the request it refines.
+- **Only what you asked for.** A request must quote your own words; the mod checks the quote against the conversation (prompts, messages typed while Claude works, question-dialog answers), so Claude's own ideas and technical steps stay off the list. Claude breaks each request into plain-outcome parts; progress counts parts. "Don't touch X" is recorded as the goal "X stays untouched", checked when the work is done. A small follow-up goes under the request it refines.
 - **Recorded before the work.** Each message reminds Claude to put it on the list first, so you see it open before it is done.
 - **Live status, no model.** *Now* comes from the actual tool calls; background work is checked every 5 seconds.
-- **Rules to keep** ("don't touch sync") stay out of sight while they hold; Claude still has them, and a broken one appears as a red warning with a notice.
-- **Observer.** A small model reads each result and each turn. It only adds: a tick when the line it quotes is really in the output and names that item (a suite-wide "68 pass" proves nothing), a broken rule, a *may be out of date* flag, and (at turn end) a request or change of mind Claude missed. Switch it off in the footer: no model call, nothing leaves the session.
+- **Observer.** A small model reads each result and each turn. It only adds: a tick when the line it quotes is really in the output and names that item (a suite-wide "68 pass" proves nothing), a *may be out of date* flag, and (at turn end) a request or change of mind Claude missed. Switch it off in the footer: no model call, nothing leaves the session.
 - **Latest only.** Cancelled and replaced items leave the pane; the record stays for Claude, so a cancel can be undone.
 - **Per worktree.** One shared list per project root, kept across sessions and kept in step between terminal and desktop sessions; concurrent changes are merged, not overwritten. A removed worktree's list is deleted at the next start.
 

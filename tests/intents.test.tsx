@@ -910,35 +910,28 @@ test('a request breaks into parts; progress counts the parts and the request is 
   expect(saved.intents.find(one => one.id === '1')?.source).toBe('修好草稿消失的問題')
 })
 
-test('a limit is never ticked or counted, stays out of sight while it holds, and shows as a red warning when broken', async ($, on) => {
-  engine(on)
+test('a list saved with old "limits" loads them as ordinary goals, open, with their words and checks kept', async ($, on) => {
+  engine(on, {
+    [`wt:${ROOT}`]: {
+      purpose: { ai: '修好草稿', mine: '' },
+      intents: [
+        { id: '1', ai: '同步不受影響', mine: '', check: 'diff 不含 Sync/', isMet: false, evidence: '', kind: 'limit', source: '不要動到同步', broken: { evidence: '動到 Sync/', at: 1 } },
+      ],
+      drift: null,
+      updatedAt: 1,
+    },
+  })
   await start($)
-  await $.tool.call({
-    tool: ADD,
-    intents: [
-      { summary: '草稿要保留', check: 'DraftPersistTests', source: '關掉 app 後草稿要保留' },
-      { summary: '同步不受影響', check: 'diff 不含 Sync/', source: '不要動到同步', kind: 'limit' },
-    ],
-  } as never)
-  const ticked = await $.tool.call({ tool: MET, id: '2', evidence: 'ok' } as never)
-  expect('deny' in ticked && (ticked.deny ?? "").includes('limit')).toBe(true)
-
-  // While it holds, the rule is not shown at all (Claude still has it).
-  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  let shown = await texts(pane)
-  expect(shown.some(x => x.endsWith(' 0/1') && /[▓░]/.test(x))).toBe(true)
-  expect(shown.some(x => x.includes('同步不受影響') || x.includes('限制'))).toBe(false)
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const shown = await texts(pane)
+  expect(shown).toContain('○ 1. 同步不受影響')
+  expect(shown).toContain('  檢查：diff 不含 Sync/')
+  expect(shown.some(x => x.includes('規則') || x.includes('限制') || x.includes('✗'))).toBe(false)
   await pane.unmount()
-
-  // Broken: a red warning appears, with what broke it, and a notice.
-  await $.tool.call({ tool: REVISE, id: '2', broken: 'diff 動到 Sync/Engine.swift' } as never)
-  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  shown = await texts(pane)
-  expect(shown).toContain('✗ 規則被破壞：同步不受影響')
-  expect(shown).toContain('  diff 動到 Sync/Engine.swift')
-  await pane.unmount()
+  // An ordinary goal now: it can be ticked.
+  const ticked = await $.tool.call({ tool: MET, id: '1', evidence: 'diff 只動到 Drafts/' } as never)
+  expect('deny' in ticked).toBe(false)
 })
-
 test('a dropped request is cancelled only on the person\'s words, takes its parts along, and can be restored', async ($, on) => {
   const store = engine(on)
   await start($)

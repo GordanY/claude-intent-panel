@@ -2,8 +2,8 @@
 // counted, how the person's words are checked, and the text Claude reads.
 //
 // Two layers. A REQUEST is what the person asked for, in their own words
-// (`source`, checked against the conversation): a goal (an outcome) or a limit
-// (something that must not happen). A PART is Claude's breakdown of one goal
+// (`source`, checked against the conversation): an outcome. ("Don't touch X"
+// is the outcome "X stays untouched".) A PART is Claude's breakdown of one goal
 // request into plain outcomes the person would recognise as pieces of what
 // they asked (`parent`). Progress counts parts; a request with no parts counts
 // as one. Claude's own ideas outside the requests never join the list.
@@ -16,7 +16,20 @@ import type { Actor, Closed, HistoryEntry, HistoryWhat, Intent, Purpose, Stage, 
 
 export const HISTORY_MAX = 20
 
-export const kindOf = (one: Intent): 'goal' | 'limit' => one.kind ?? 'goal'
+/**
+ * Lists saved before limits were removed (0.14.3): a limit becomes an ordinary
+ * open goal, its "broken" note dropped (its words and check are kept).
+ */
+export function withoutLimits(list: readonly Intent[]): Intent[] {
+  if (!list.some(one => one.kind || one.broken)) return [...list]
+  return list.map(one => {
+    if (!one.kind && !one.broken) return one
+    const goal = { ...one }
+    delete goal.kind
+    delete goal.broken
+    return goal
+  })
+}
 export const isLive = (one: Intent): boolean => !one.closed
 export const isRequest = (one: Intent): boolean => !one.parent
 
@@ -27,7 +40,7 @@ export function partsOf(list: readonly Intent[], id: string): Intent[] {
 
 /** What progress counts: live goals with no live parts (parts, and requests not broken down). */
 export function units(list: readonly Intent[]): Intent[] {
-  return list.filter(one => isLive(one) && kindOf(one) === 'goal' && partsOf(list, one.id).length === 0)
+  return list.filter(one => isLive(one) && partsOf(list, one.id).length === 0)
 }
 
 export function progress(list: readonly Intent[]): { met: number; total: number } {
@@ -263,7 +276,6 @@ function statusText(list: readonly Intent[], one: Intent): string {
       one.closed.as === 'replaced' ? `replaced by ${one.closed.replacedBy ?? '?'}` : `cancelled by ${one.closed.by}`
     return `${how}${one.closed.isAuto ? auto : ''}: ${one.closed.reason}`
   }
-  if (kindOf(one) === 'limit') return one.broken ? `BROKEN${one.broken.isAuto ? auto : ''}: ${one.broken.evidence}` : 'holding'
   const parts = partsOf(list, one.id)
   if (parts.length > 0) {
     const met = parts.filter(part => part.isMet).length
@@ -275,13 +287,13 @@ function statusText(list: readonly Intent[], one: Intent): string {
 }
 
 function line(list: readonly Intent[], one: Intent, isWithHistory: boolean): string {
-  const role = one.parent ? `part ${labelOf(list, one)} of ${one.parent}` : `request · ${kindOf(one)}`
+  const role = one.parent ? `part ${labelOf(list, one)} of ${one.parent}` : 'request · goal'
   const fields = [`${one.id}. [${role} · ${statusText(list, one)}] ${one.ai}`]
   if (one.agent) fields.push(`subagent: "${one.agent}"`)
   if (one.mine) fields.push(`person's words: ${one.mine}`)
   if (one.source) fields.push(`${one.parent ? "person's follow-up" : 'source'}: "${one.source}"`)
   fields.push(`check: ${one.check || '(none)'}`)
-  if (one.isMet && kindOf(one) === 'goal' && partsOf(list, one.id).length === 0) fields.push(`evidence: ${one.evidence}`)
+  if (one.isMet && partsOf(list, one.id).length === 0) fields.push(`evidence: ${one.evidence}`)
   if (isWithHistory && one.history && one.history.length > 0) {
     fields.push(
       'history: ' +
@@ -408,7 +420,7 @@ export function merge3<C extends Core>(base: C | null, local: C, stored: C | nul
 
 /**
  * The list in brief: open requests with their open parts (finished parts
- * as a count), limits, and every finished request folded into one line.
+ * as a count), and every finished request folded into one line.
  * Checks, evidence and sources are intent_list's.
  */
 export function briefText(p: Purpose, list: readonly Intent[]): string {
@@ -419,10 +431,6 @@ export function briefText(p: Purpose, list: readonly Intent[]): string {
   const live = list.filter(one => isRequest(one) && isLive(one))
   const finished: string[] = []
   for (const request of live) {
-    if (kindOf(request) === 'limit') {
-      lines.push(`${request.id}. [limit · ${request.broken ? 'BROKEN' : 'holding'}] ${clip(request.ai, 70)}`)
-      continue
-    }
     if (isDone(list, request)) {
       finished.push(request.id)
       continue

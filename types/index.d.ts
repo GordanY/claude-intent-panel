@@ -29,7 +29,7 @@ export type Closed = {
   isAuto?: boolean
 }
 
-/** A limit a result showed broken. */
+/** Lists before 0.14.3 only: a limit a result showed broken (dropped on load). */
 export type Broken = { evidence: string; at: number; isAuto?: boolean }
 
 /** A planned stage of a request, in order; its parts name it. */
@@ -49,7 +49,7 @@ export type Intent = {
   ai: string
   /** The person's own words, typed in the pane; '' until they write some. */
   mine: string
-  /** The concrete check that proves the goal is met (for a limit: that it still holds). */
+  /** The concrete check that proves the goal is met. */
   check: string
   isMet: boolean
   /** What was run or observed when the check passed; '' while open. */
@@ -59,7 +59,7 @@ export type Intent = {
    * confirmed by the main conversation.
    */
   isAuto?: boolean
-  /** A goal (an outcome) or a limit (must not happen / must stay as it is). Absent: goal. */
+  /** Lists before 0.14.3 only: 'limit' (now loaded as an ordinary goal). */
   kind?: 'goal' | 'limit'
   /**
    * The person's own words that asked for it, checked against the
