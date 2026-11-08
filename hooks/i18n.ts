@@ -111,6 +111,7 @@ export type Strings = {
   keep: string
   closedGroup: (n: number) => string
   cancelledLabel: string
+  removedGroup: (n: number) => string
   replacedBy: (id: string) => string
   restore: string
   saidLabel: string
@@ -194,6 +195,7 @@ const EN: Strings = {
   keep: 'Keep',
   closedGroup: n => `${n} cancelled or replaced`,
   cancelledLabel: 'cancelled',
+  removedGroup: n => `Removed (${n})`,
   replacedBy: id => `replaced by ${id}`,
   restore: '↺ Restore',
   saidLabel: 'You said',
@@ -293,6 +295,7 @@ const ZH: Strings = {
   keep: '保留',
   closedGroup: n => `已取消／取代 ${n} 項`,
   cancelledLabel: '已取消',
+  removedGroup: n => `已移除（${n}）`,
   replacedBy: id => `已由 ${id} 取代`,
   restore: '↺ 還原',
   saidLabel: '你說',
@@ -394,6 +397,7 @@ const JA: Strings = {
   keep: '残す',
   closedGroup: n => `取り消し・置き換え ${n} 件`,
   cancelledLabel: '取り消し',
+  removedGroup: n => `削除済み（${n}）`,
   replacedBy: id => `${id} に置き換え`,
   restore: '↺ 戻す',
   saidLabel: 'あなたの言葉',

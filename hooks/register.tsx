@@ -13,6 +13,7 @@ import {
   idKey,
   isFalsifiable,
   itemLines,
+  joinWords,
   mentions,
   labelOf,
   movePart,
@@ -91,6 +92,19 @@ const baseline = atom(
 /** Whether the observer may run (the person's choice, saved for every session). */
 const isObserverOn = atom({ plugin: 'intent-tracker', key: 'isObserverOn' } as const, true)
 const OBSERVER_KEY = 'settings:observer'
+/** Every text the person writes in the pane, per worktree, only ever appended to: what was replaced can be found again. */
+const MINE_LOG_KEY = 'mine:'
+const MINE_LOG_MAX = 500
+
+async function logMine($: EngineInterface, target: string, text: string, was: string): Promise<void> {
+  const root = await read($, loadedRoot)
+  if (!root) return
+  const at = await $.clock.now()
+  const old = await $.store.get(MINE_LOG_KEY + root)
+  const log = Array.isArray(old) ? old : []
+  await $.store.set(MINE_LOG_KEY + root, [...log, { target, text, was, at }].slice(-MINE_LOG_MAX))
+}
+
 /** Where the person's words are kept per worktree, beside its list, so they still count after a restart. */
 const HEARD_KEY = 'heard:'
 
@@ -275,6 +289,8 @@ const stage = atom({ plugin: 'intent-tracker', key: 'stage' } as const, NO_STAGE
 const shownDetails = atom({ plugin: 'intent-tracker', key: 'shownDetails' } as const, null as string | null)
 /** Requests whose finished parts the pane shows (folded under the request by default). */
 const expanded = atom({ plugin: 'intent-tracker', key: 'expanded' } as const, [] as string[])
+/** Whether the removed items holding the person's words are shown (folded by default). */
+const isRemovedOpen = atom({ plugin: 'intent-tracker', key: 'isRemovedOpen' } as const, false)
 /** Whether the finished goals are expanded in the pane (folded by default). */
 const isDoneOpen = atom({ plugin: 'intent-tracker', key: 'isDoneOpen' } as const, false)
 
@@ -610,7 +626,7 @@ async function exists($: EngineInterface, path: string): Promise<boolean> {
 /** Deletes the lists of worktrees whose folder was removed. */
 async function sweep($: EngineInterface): Promise<void> {
   for (const key of await $.store.keys()) {
-    const prefix = key.startsWith(KEY) ? KEY : key.startsWith(HEARD_KEY) ? HEARD_KEY : null
+    const prefix = key.startsWith(KEY) ? KEY : key.startsWith(HEARD_KEY) ? HEARD_KEY : key.startsWith(MINE_LOG_KEY) ? MINE_LOG_KEY : null
     if (!prefix) continue
     const path = key.slice(prefix.length)
     if (await exists($, path)) continue
@@ -1163,7 +1179,11 @@ export const register: Register = on => {
           const twin = next.find(
             one => one.id !== item.id && one.isAuto && !one.isMet && isLive(one) && !!one.source && sameWords(one.source, words),
           )
-          if (twin) next = close(next, twin.id, { as: 'replaced', reason: 'recorded again by Claude', by: 'claude', at, replacedBy: item.id })
+          if (twin) {
+            // Two items for the same words merge: the person's words on either are kept, joined.
+            if (twin.mine) next = next.map(one => (one.id === item.id ? { ...one, mine: joinWords(one.mine, twin.mine) } : one))
+            next = close(next, twin.id, { as: 'replaced', reason: 'recorded again by Claude', by: 'claude', at, replacedBy: item.id })
+          }
         }
         const old = item.replaces ? resolveId(current, item.replaces) : undefined
         if (old) {
@@ -1522,6 +1542,8 @@ export const register: Register = on => {
         const text = value.trim()
         await sync($)
         const at = await $.clock.now()
+        const was = target === 'purpose' ? (await read($, purpose)).mine : ((await read($, intents)).find(one => one.id === target)?.mine ?? '')
+        if (was !== text) await logMine($, target, text, was)
         if (target === 'purpose') await update($, purpose, old => ({ ...old, mine: text }))
         else {
           await update($, intents, l =>
@@ -2004,6 +2026,40 @@ export const register: Register = on => {
       </Box>
     )
 
+    // Removed (cancelled or replaced) items that hold the person's own words: kept in sight, folded,
+    // so their words never vanish from the pane; restorable.
+    const removedWithWords = list.filter(one => !isLive(one) && one.mine.trim() !== '')
+    const isRemovedShown = await read($, isRemovedOpen)
+    const removedGroup = removedWithWords.length > 0 && (
+      <Box flexDirection="column">
+        <Button
+          key="removed-toggle"
+          label={`⊘ ${t.removedGroup(removedWithWords.length)} ${isRemovedShown ? '▾' : '▸'}`}
+          plain
+          dimColor
+          onPress={() => update($, isRemovedOpen, v => !v)}
+        />
+        {isRemovedShown &&
+          removedWithWords.map(one => (
+            <Box key={`removed-${one.id}`} flexDirection="column">
+              <Box flexDirection="row" gap={1}>
+                <Text dimColor wrap="wrap">
+                  ⊘ {labelOf(list, one)}. {one.ai}
+                  {t.paren(one.closed?.as === 'replaced' ? t.replacedBy(one.closed.replacedBy ?? '?') : t.cancelledLabel)}
+                </Text>
+                <Button key={`restore-${one.id}`} label={t.restore} plain dimColor onPress={personDo((l, at) => restore(l, one.id, at, 'person'))} />
+              </Box>
+              <Text wrap="wrap">
+                {'  '}
+                {t.you}
+                {t.colon}
+                {one.mine}
+              </Text>
+            </Box>
+          ))}
+      </Box>
+    )
+
     const clearRow =
       edit === 'confirm-clear' ? (
         <Box flexDirection="row" gap={1}>
@@ -2038,6 +2094,7 @@ export const register: Register = on => {
         {driftBox}
         {openRequests.map(one => goalRow(one, ''))}
         {doneGroup}
+        {removedGroup}
         {clearRow}
         {footer}
       </Box>

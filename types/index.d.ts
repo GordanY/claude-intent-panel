@@ -158,6 +158,8 @@ declare module 'claude-code' {
       shownDetails: string | null
       /** Requests whose finished parts are shown (folded by default). */
       expanded: string[]
+      /** The removed items holding the person's words are shown (folded by default). */
+      isRemovedOpen: boolean
       /** The finished goals are expanded in the pane. */
       isDoneOpen: boolean
     }

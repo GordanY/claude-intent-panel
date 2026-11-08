@@ -417,10 +417,37 @@ export function merge3<C extends Core>(base: C | null, local: C, stored: C | nul
     if (!was) out.push(one)
     else if (same(one, was)) {
       if (now) out.push(now)
+    } else if (now) {
+      // This session changed the item and so may the other: this session's version wins, but the person's
+      // own words are merged field by field, so a word written in either session is never lost.
+      out.push({ ...one, mine: mergeWords(was.mine, one.mine, now.mine) })
     } else out.push(one)
   }
   for (const one of stored.intents) if (!out.some(x => x.id === one.id) && !b.has(one.id)) out.push(one)
-  return { ...local, purpose: pick(base.purpose, local.purpose, stored.purpose), drift: pick(base.drift, local.drift, stored.drift), intents: out }
+  const purpose = pick(base.purpose, local.purpose, stored.purpose)
+  return {
+    ...local,
+    purpose: { ...purpose, mine: mergeWords(base.purpose.mine, local.purpose.mine, stored.purpose.mine) },
+    drift: pick(base.drift, local.drift, stored.drift),
+    intents: out,
+  }
+}
+
+/** The person's words from two sides: one side's change wins over no change; two different changes are both kept. */
+export function mergeWords(base: string, a: string, b: string): string {
+  if (a === b) return a
+  if (a === base) return b
+  if (b === base) return a
+  return joinWords(a, b)
+}
+
+/** Two texts of the person's, each kept once, joined with "; ". */
+export function joinWords(...texts: readonly string[]): string {
+  const seen: string[] = []
+  for (const text of texts) {
+    for (const piece of text.split(/;\s*/).map(x => x.trim()).filter(Boolean)) if (!seen.includes(piece)) seen.push(piece)
+  }
+  return seen.join('; ')
 }
 
 /**

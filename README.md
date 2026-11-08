@@ -48,7 +48,7 @@ Also running
 - **Recorded before the work.** Each message reminds Claude to put it on the list first, so you see it open before it is done.
 - **Live status, no model.** *Now* comes from the actual tool calls; background work is checked every 5 seconds.
 - **Observer.** A small model reads each result and each turn. It only adds: a tick when the line it quotes is really in the output and names that item (a suite-wide "68 pass" proves nothing), a *may be out of date* flag, and (at turn end) a request or change of mind Claude missed. Switch it off in the footer: no model call, nothing leaves the session.
-- **Latest only.** Cancelled and replaced items leave the pane; the record stays for Claude, so a cancel can be undone.
+- **Latest only, but your words are never lost.** Cancelled and replaced items leave the pane, except those holding words you wrote, which wait under a folded *Removed* section (restorable). Nothing Claude or the observer does can change your words; when two sessions write on the same item, both texts are kept, joined with "; ". Rewriting your own words replaces them, and every earlier version is kept in an append-only record.
 - **Per worktree.** One shared list per project root, kept across sessions and kept in step between terminal and desktop sessions; concurrent changes are merged, not overwritten. A removed worktree's list is deleted at the next start.
 
 ## Where it runs

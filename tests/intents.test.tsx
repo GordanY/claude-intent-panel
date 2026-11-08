@@ -1996,3 +1996,142 @@ test('every check must be verifiable and falsifiable: vague ones are refused, sk
   const ok = await $.tool.call({ tool: ADD, intents: [{ summary: '桌面版可用', check: '桌面版開啟後面板顯示清單', source: '桌面版也要能用' }] } as never)
   expect('deny' in ok).toBe(false)
 })
+
+/** Writes the person's own words on an item (or the purpose) in the pane. */
+async function writeMine($: Parameters<Parameters<typeof test>[1]>[0], target: string, text: string) {
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: `edit-${target}` })
+  await pane.input({ key: `mine-${target}`, text })
+  await pane.unmount()
+}
+
+test("merging keeps both sides' words: two sessions writing on the same item keep both, joined with \"; \"", async ($, on) => {
+  const store = engine(on)
+  await seed($)
+  // The other session writes its own words on item 1 just before this one saves.
+  ui.beforeGet = () => {
+    ui.beforeGet = st => {
+      const shared = st.get(`wt:${ROOT}`) as { intents: Intent[]; updatedAt: number }
+      st.set(`wt:${ROOT}`, { ...shared, intents: shared.intents.map(one => (one.id === '1' ? { ...one, mine: '另一邊寫的' } : one)) })
+    }
+  }
+  await writeMine($, '1', '這邊寫的')
+  const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
+  expect(saved.intents.find(one => one.id === '1')?.mine).toBe('這邊寫的; 另一邊寫的')
+})
+
+test('the purpose in your words is never lost when another session writes it at the same time', async ($, on) => {
+  const store = engine(on)
+  await seed($)
+  ui.beforeGet = () => {
+    ui.beforeGet = st => {
+      const shared = st.get(`wt:${ROOT}`) as { purpose: { ai: string; mine: string }; updatedAt: number }
+      st.set(`wt:${ROOT}`, { ...shared, purpose: { ...shared.purpose, mine: '別的對話寫的原意' } })
+    }
+  }
+  await writeMine($, 'purpose', '我自己寫的原意')
+  const saved = store.get(`wt:${ROOT}`) as { purpose: { mine: string } }
+  expect(saved.purpose.mine).toBe('我自己寫的原意; 別的對話寫的原意')
+})
+
+test('a removed item that holds your words shows in a folded "removed" section, restorable; one without your words does not', async ($, on) => {
+  engine(on)
+  await seed($)
+  await writeMine($, '1', '草稿一定要留著')
+  ui.messages = [...ui.messages, { role: 'user', text: '草稿那個先不用了，同步那個也不用', toolUses: [] }]
+  await $.tool.call({ tool: REVISE, id: '1', cancel: '草稿那個先不用了' } as never)
+  await $.tool.call({ tool: REVISE, id: '2', cancel: '同步那個也不用' } as never)
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Button', key: 'removed-toggle' }))?.text).toBe('⊘ 已移除（1） ▸')
+  await pane.press({ key: 'removed-toggle' })
+  const shown = await texts(pane)
+  expect(shown).toContain('⊘ 1. 關掉 app 後草稿要保留（已取消）')
+  expect(shown).toContain('  你：草稿一定要留著')
+  expect(shown.some(x => x.includes('不要動到同步'))).toBe(false)
+  await pane.press({ key: 'restore-1' })
+  expect((await texts(pane)).some(x => x.startsWith('○ 1. 關掉 app 後草稿要保留'))).toBe(true)
+  await pane.unmount()
+})
+
+test('rewriting your words replaces them, and the old text is kept in an append-only record', async ($, on) => {
+  const store = engine(on)
+  await seed($)
+  await writeMine($, '1', '第一版')
+  await writeMine($, '1', '第二版')
+  const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
+  expect(saved.intents.find(one => one.id === '1')?.mine).toBe('第二版')
+  const log = store.get(`mine:${ROOT}`) as { target: string; text: string; was: string }[]
+  expect(log.map(x => [x.target, x.was, x.text])).toEqual([
+    ['1', '', '第一版'],
+    ['1', '第一版', '第二版'],
+  ])
+})
+
+test('your own words survive every change: tools, ticks, the observer, cancel and restore, replace, merges', async ($, on) => {
+  const store = engine(on)
+  on('ui.toast', () => ({ value: undefined }))
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({
+    value: {
+      isAnswered: true,
+      text: JSON.stringify({ onTrack: true, met: [{ id: '1a', quote: 'DraftCloseTests passed', evidence: '關掉測試過了' }], stale: [{ id: '1b', why: '改做法' }] }),
+      usage: USAGE,
+    },
+  }))
+  await seedParts($)
+  await writeMine($, 'purpose', '我要的原意')
+  await writeMine($, '1', '需求的我的話')
+  await writeMine($, 'p1', '分項的我的話')
+  const mineOf = (id: string) => (store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.find(one => one.id === id)?.mine
+  const purposeMine = () => (store.get(`wt:${ROOT}`) as { purpose: { mine: string } }).purpose.mine
+
+  await $.tool.call({ tool: REVISE, id: '1a', summary: '改寫摘要', check: 'DraftCloseTests 通過', active: true, position: 2 } as never)
+  await $.tool.call({ tool: REVISE, purpose: 'Claude 改了原意' } as never)
+  await $.tool.call({ tool: ADD, intents: [{ summary: '多一個分項', check: 'ExtraPartTests', parent: '1' }] } as never)
+  setMessages(() => ({
+    value: [
+      { role: 'user', text: '修好草稿消失的問題', toolUses: [] },
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 't', tool: 'Bash', input: { command: 'npm test' }, text: 'DraftCloseTests passed' }] },
+    ],
+  }))
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+  await $.tool.call({ tool: REVISE, id: '1a', reopen: true } as never)
+  await $.tool.call({ tool: REVISE, id: '1a', cancel: '用不到了' } as never)
+  await $.tool.call({ tool: REVISE, id: '1a', restore: true } as never)
+  // Another session changes something else meanwhile; the merge keeps every word.
+  const shared = store.get(`wt:${ROOT}`) as { intents: Intent[]; updatedAt: number }
+  store.set(`wt:${ROOT}`, { ...shared, intents: shared.intents.map(one => (one.id === 'p2' ? { ...one, isMet: true, evidence: 'x' } : one)), updatedAt: shared.updatedAt + 1 })
+  await ui.clock.advance(2_000)
+  // The request is replaced: its words stay on the old item, shown under "removed".
+  ui.messages = [...ui.messages, { role: 'user', text: '改成：草稿要自動存到雲端', toolUses: [] }]
+  await $.tool.call({ tool: ADD, intents: [{ summary: '草稿自動存雲端', check: 'CloudSaveTests', source: '草稿要自動存到雲端', replaces: '1' }] } as never)
+
+  expect(purposeMine()).toBe('我要的原意')
+  expect(mineOf('1')).toBe('需求的我的話')
+  expect(mineOf('p1')).toBe('分項的我的話')
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'removed-toggle' })
+  expect(await texts(pane)).toContain('  你：需求的我的話')
+  await pane.unmount()
+})
+
+test('when two items for the same words merge, the person\'s words on the removed one carry over, joined', async ($, on) => {
+  const store = engine(on)
+  on('ui.toast', () => ({ value: undefined }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({
+    value: { isAnswered: true, text: JSON.stringify({ onTrack: true, add: [{ quote: '匯出 PDF 要能選頁', summary: '可選頁匯出', check: 'ExportPageTests 通過' }] }), usage: USAGE },
+  }))
+  await seed($)
+  setMessages(() => ({ value: [{ role: 'user', text: '匯出 PDF 要能選頁', toolUses: [] }, { role: 'assistant', text: '好', toolUses: [] }] }))
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+  const auto = (store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.find(one => one.ai === '可選頁匯出') as Intent
+  await writeMine($, auto.id, '要能一次選多頁')
+  await $.tool.call({ tool: ADD, intents: [{ summary: '匯出能選頁', check: 'ExportPageTests 通過', source: '匯出 PDF 要能選頁' }] } as never)
+  const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
+  expect(saved.intents.find(one => one.ai === '匯出能選頁')?.mine).toBe('要能一次選多頁')
+  expect(saved.intents.find(one => one.id === auto.id)?.closed?.as).toBe('replaced')
+})
