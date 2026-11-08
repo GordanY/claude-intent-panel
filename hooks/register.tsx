@@ -415,6 +415,17 @@ const RULE_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1" viewBox="0 0 2000 1" preserveAspectRatio="none">' +
   '<rect width="2000" height="1" fill="#808080" fill-opacity="0.35"/></svg>'
 
+/** A progress bar as wide as its slot: a light track and the done share over it. */
+function progressSvg(share: number): string {
+  const done = Math.round(Math.max(0, Math.min(1, share)) * 2000)
+  return (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="6" viewBox="0 0 2000 6" preserveAspectRatio="none">' +
+    '<rect width="2000" height="6" rx="3" fill="#808080" fill-opacity="0.25"/>' +
+    (done > 0 ? `<rect width="${done}" height="6" rx="3" fill="#4caf50"/>` : '') +
+    '</svg>'
+  )
+}
+
 /** Terminal cells a label takes: East Asian wide characters count two. */
 function cells(text: string): number {
   let n = 0
@@ -1552,15 +1563,27 @@ export const register: Register = on => {
     )
 
     // Progress at a glance (the count is in the title too): parts count, a
-    // request with no parts counts as one.
-    const barWidth = Math.max(6, Math.min(20, columns - 8))
-    const filled = counted.total === 0 ? 0 : Math.round((counted.met / counted.total) * barWidth)
-    const progressBar = (
-      <Text dimColor>
-        {'▓'.repeat(filled)}
-        {'░'.repeat(barWidth - filled)} {counted.met}/{counted.total}
-      </Text>
-    )
+    // request with no parts counts as one. The bar fills the pane's width: the
+    // terminal in block characters, the desktop (whose font would wrap them)
+    // as a drawn bar.
+    const share = counted.total === 0 ? 0 : counted.met / counted.total
+    const countLabel = `${counted.met}/${counted.total}`
+    const barWidth = Math.max(6, columns - cells(` ${countLabel}`))
+    const filled = Math.round(share * barWidth)
+    const progressBar =
+      e.surface === 'terminal' || !('Svg' in table) ? (
+        <Text dimColor>
+          {'▓'.repeat(filled)}
+          {'░'.repeat(barWidth - filled)} {countLabel}
+        </Text>
+      ) : (
+        <Box flexDirection="row" gap={1} alignItems="center">
+          <Box flexGrow={1}>
+            <table.Svg key="progress" source={progressSvg(share)} alt={countLabel} height={6} />
+          </Box>
+          <Text dimColor>{countLabel}</Text>
+        </Box>
+      )
 
     // What is happening now, the latest only: beside each active part, its own
     // activity; with no part showing one, the session's stage under the bar.

@@ -139,7 +139,9 @@ test('goals show in the pane, tick once their check passes, and are saved for th
 
   await $.tool.call({ tool: MET, id: '1', evidence: 'DraftPersistTests 3/3 通過' } as never)
   ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
+  // The desktop draws the bar (block characters would wrap there), the count beside it.
+  expect(await ui.find({ type: 'Text', text: /[▓░]/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^1\/2$/ }))?.text).toBe('1/2')
   // Done goals fold to one line until opened.
   expect(await ui.find({ type: 'Text', text: /草稿要保留/ })).toBeUndefined()
   expect((await ui.find({ type: 'Button', key: 'done-toggle' }))?.text).toBe('✓ 已完成 1 項 ▸')
@@ -563,7 +565,7 @@ test('a change another session saves for this worktree shows here and reaches th
   await ui.clock.advance(2_000)
 
   const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await pane.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
+  expect((await pane.find({ type: 'Text', text: /^1\/2$/ }))?.text).toBe('1/2')
   await pane.unmount()
 
   const next = await $.prompt.submit({ text: '繼續' })
@@ -1397,5 +1399,16 @@ test('running work is checked every few seconds against the facts: ended subagen
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   shown = await texts(pane)
   expect(shown.some(x => x.includes('同時進行') || x.includes('背景指令') || x.includes('子代理'))).toBe(false)
+  await pane.unmount()
+})
+
+test('the progress bar fills the pane width on the terminal', async ($, on) => {
+  engine(on)
+  await seed($)
+  await $.tool.call({ tool: MET, id: '1', evidence: 'ok' } as never)
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const bar = (await texts(pane)).find(x => /[▓░]/.test(x)) ?? ''
+  // 50 columns: 46 cells of bar, a space, "1/2".
+  expect(bar).toBe(`${'▓'.repeat(23)}${'░'.repeat(23)} 1/2`)
   await pane.unmount()
 })

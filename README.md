@@ -50,7 +50,7 @@ Update later with `/plugin marketplace update claude-intent-panel`, then `/reloa
 - The buttons sit in a light toolbar at the bottom of the pane: icon and text when the pane is wide enough, icon alone when it is narrow (▶ start, ↻ refresh, ⌫ clear, ✕ close).
 - An empty pane shows **▶ Start**: it asks Claude to build the purpose and goals from the conversation so far (useful in a session that was already running), ticking goals already verified.
 - **↻ Refresh AI content** asks Claude to redo the AI side (purpose, goal summaries, checks and ticks) from the current conversation; your own words are never changed.
-- The pane keeps the key information in view: the purpose in one line, a progress bar, any drift warning above the goals, then the open goals with their checks. Finished goals fold into one line (**✓ 3 done ▸**); open it for each goal and its evidence.
+- The pane keeps the key information in view: the purpose in one line, a progress bar across the full width of the pane, any drift warning above the goals, then the open goals with their checks. Finished goals fold into one line (**✓ 3 done ▸**); open it for each goal and its evidence.
 - Below a divider at the very bottom, one light line of metadata: when the list last changed; **goals** and the model writing and ticking them (the session's own model, so it follows the session); **drift** and the model doing the drift check, which you can change: press its name and pick Haiku, Sonnet or Opus (saved on your machine for every worktree and session, like the language; Haiku is the cheapest); and 🌐 the language.
 - In the terminal, move focus into the pane with `ctrl+x tab` (or click) to type in a field.
 
