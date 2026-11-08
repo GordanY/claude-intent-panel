@@ -580,3 +580,18 @@ test('a language another session picks is applied here', async ($, on) => {
   expect((await pane.find({ type: 'Text', text: /Check/ }))?.text).toBe('  Check: DraftPersistTests 通過')
   await pane.unmount()
 })
+
+test('a desktop-app session (SDK-hosted, no surface at start) turns on when the desktop attaches', async ($, on) => {
+  engine(on)
+  on('session.surfaces', () => ({ value: [] }))
+  on('session.attach', (_, e) => ({ clientId: e.clientId }))
+  await $.session.start({ cwd: ROOT, surface: null, isInteractive: false })
+  expect(ui.registered).toBe(0)
+
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  expect(ui.registered).toBe(4)
+  await $.tool.call({ tool: ADD, purpose: '桌面版也能用', intents: [{ summary: '面板出現', check: '看得到' }] } as never)
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await pane.find({ type: 'Text', text: /面板出現/ }))?.text).toBe('○ 1. 面板出現')
+  await pane.unmount()
+})

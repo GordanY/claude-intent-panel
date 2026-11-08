@@ -354,35 +354,54 @@ async function checkDrift($: EngineInterface): Promise<void> {
   await save($)
 }
 
+/**
+ * Turns the mod on for a session a person can see: tools, `/intents`, the
+ * shared list and its timers. Runs once per load, at start under the REPL, or
+ * when a surface first attaches (the desktop app's Code tab hosts its session
+ * through the SDK, so it starts with no surface and attaches one after).
+ */
+async function activate($: EngineInterface): Promise<void> {
+  if (await read($, isActive)) return
+  await update($, isActive, () => true)
+  for (const spec of toolSpecs) await $.tool.register(spec)
+  const chosen = asLang(await $.store.get(LANG_KEY))
+  await update($, lang, () => chosen)
+  await $.command.register({ name: 'intents', description: strings(chosen).command })
+  await sweep($).catch(() => undefined)
+  await sync($)
+  // "N 分鐘前" in the footer: the pane redraws once a minute (a reload
+  // cancels this timer and session.start starts a new one).
+  const at = await $.clock.now()
+  await update($, now, () => at)
+  $.clock.every(60_000, () => {
+    void $.clock.now().then(t => update($, now, () => t))
+  })
+  // Another session in this worktree (a terminal beside the desktop app, or
+  // the reverse) may change the shared list or language: pick it up.
+  $.clock.every(SYNC_MS, () => {
+    void (async () => {
+      await sync($)
+      const shared = asLang(await $.store.get(LANG_KEY))
+      if (JSON.stringify(shared) !== JSON.stringify(await read($, lang))) {
+        await update($, lang, () => shared)
+        await refreshTitle($)
+      }
+    })().catch(() => undefined)
+  })
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await update($, isActive, () => e.isInteractive)
-    if (!e.isInteractive) return next(e)
-    for (const spec of toolSpecs) await $.tool.register(spec)
-    const chosen = asLang(await $.store.get(LANG_KEY))
-    await update($, lang, () => chosen)
-    await $.command.register({ name: 'intents', description: strings(chosen).command })
-    await sweep($).catch(() => undefined)
-    await sync($)
-    // "N 分鐘前" in the footer: the pane redraws once a minute (a reload
-    // cancels this timer and session.start starts a new one).
-    const at = await $.clock.now()
-    await update($, now, () => at)
-    $.clock.every(60_000, () => {
-      void $.clock.now().then(t => update($, now, () => t))
-    })
-    // Another session in this worktree (a terminal beside the desktop app, or
-    // the reverse) may change the shared list or language: pick it up.
-    $.clock.every(SYNC_MS, () => {
-      void (async () => {
-        await sync($)
-        const shared = asLang(await $.store.get(LANG_KEY))
-        if (JSON.stringify(shared) !== JSON.stringify(await read($, lang))) {
-          await update($, lang, () => shared)
-          await refreshTitle($)
-        }
-      })().catch(() => undefined)
-    })
+    // A reload runs this again: start from off so activate registers anew.
+    await update($, isActive, () => false)
+    if (e.isInteractive || (await $.session.surfaces()).length > 0) await activate($)
+
+    return next(e)
+  })
+
+  // A `-p` run never attaches a surface, so it stays off: no pane, no tools.
+  on('session.attach', async ($, e, next) => {
+    await activate($)
 
     return next(e)
   })
