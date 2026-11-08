@@ -34,6 +34,10 @@ Also running
 | Tag | Meaning |
 |---|---|
 | *seen in output* | ticked from the actual output of a test or report |
+| *confirmed by you* | ticked on your own words (your "yes" when asked about it) |
+| *evidence not matched* | Claude ticked it, but nothing the turn showed backs that up; Claude reruns the check or reopens it |
+| *check unclear* | no result could prove or disprove this check; Claude rewrites it |
+| *your call* | only your answer can settle this one; Claude asks you |
 | *needs confirming* | written down from your words by the observer; Claude confirms it next |
 | *may be out of date* | the work suggests it no longer applies; Claude re-plans it |
 | *checked last* | true from the start ("X stays untouched"): ticked only once the rest is done |
@@ -47,7 +51,7 @@ Also running
 - **Only what you asked for.** A request must quote your own words; the mod checks the quote against the conversation (prompts, messages typed while Claude works, question-dialog answers), so Claude's own ideas and technical steps stay off the list. Claude breaks each request into plain-outcome parts; progress counts parts. Every item's check must be verifiable and falsifiable (a named test, command or behaviour that could come out wrong); "tests pass" or "works" is refused. "Don't touch X" is recorded as the goal "X stays untouched", marked *checked last*: it is true from the start, so neither Claude nor the observer can tick it until the rest is done. A small follow-up goes under the request it refines.
 - **Recorded before the work.** Each message reminds Claude to put it on the list first, so you see it open before it is done.
 - **Live status, no model.** *Now* comes from the actual tool calls; background work is checked every 5 seconds.
-- **Observer.** A small model reads each result and each turn. It only adds: a tick when the line it quotes is really in the output and names that item (a suite-wide "68 pass" proves nothing), a *may be out of date* flag, and (at turn end) a request or change of mind Claude missed. Switch it off in the footer: no model call, nothing leaves the session.
+- **Observer.** A small model reads each message as you send it, each result, and each turn. It judges which result proves which item; the mod holds the floor: a tick needs a line really in the output that names something particular (a suite-wide "68 pass" proves nothing). It also audits Claude's own ticks (*evidence not matched*), reads each check once (*check unclear*, *your call*), ticks an item you were asked about when you say yes (*confirmed by you*: your words, verified), flags *may be out of date*, and catches a request or change of mind Claude missed. It only adds and flags; it never unticks. Switch it off in the footer: no model call, nothing leaves the session.
 - **Latest only, but your words are never lost.** Cancelled and replaced items leave the pane, except those holding words you wrote, which wait under a folded *Removed* section (restorable). Nothing Claude or the observer does can change your words; when two sessions write on the same item, both texts are kept, joined with "; ". Rewriting your own words replaces them, and every earlier version is kept in an append-only record.
 - **Per worktree.** One shared list per project root, kept across sessions and kept in step between terminal and desktop sessions; concurrent changes are merged, not overwritten. A removed worktree's list is deleted at the next start.
 

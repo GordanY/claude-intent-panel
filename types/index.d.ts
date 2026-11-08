@@ -88,6 +88,16 @@ export type Intent = {
   agent?: string
   /** The work shows it may no longer apply: Claude re-plans it. */
   isStale?: boolean
+  /** Ticked on the person's own words (verified), not on a tool's output. */
+  byPerson?: boolean
+  /** The observer found nothing this turn that Claude's tick evidence pairs with: why. Cleared on a new tick or reopen. */
+  unmatched?: string
+  /** The observer's reading of the check: a tool result could prove it, only the person's answer can, or neither (unclear). */
+  checkKind?: 'tool' | 'person' | 'none'
+  /** The check text that reading was made on (a changed check is read again). */
+  checkJudged?: string
+  /** When Claude last asked the person about this item (their "yes" then confirms it). */
+  askedAt?: number
 }
 
 /** Where the work is now: plan, investigate, build, test, fix (after a failed test), review. */

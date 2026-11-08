@@ -106,6 +106,13 @@ export type Strings = {
   staleLabel: string
   checkedLast: string
   seenInOutput: string
+  confirmedByYou: string
+  unmatchedLabel: string
+  unclearLabel: string
+  yourCallLabel: string
+  autoConfirmed: (ids: readonly string[]) => string
+  autoUnmatched: (ids: readonly string[]) => string
+  autoUnclear: (ids: readonly string[]) => string
   confirmCancelItem: string
   cancelYes: string
   keep: string
@@ -190,6 +197,13 @@ const EN: Strings = {
   staleLabel: 'may be out of date',
   checkedLast: 'checked last',
   seenInOutput: 'seen in output',
+  confirmedByYou: 'confirmed by you',
+  unmatchedLabel: 'evidence not matched',
+  unclearLabel: 'check unclear',
+  yourCallLabel: 'your call',
+  autoConfirmed: ids => `ticked ${ids.join(', ')} on your word`,
+  autoUnmatched: ids => `found no proof for the tick of ${ids.join(', ')}`,
+  autoUnclear: ids => `found the check of ${ids.join(', ')} unclear`,
   confirmCancelItem: 'Cancel this item?',
   cancelYes: 'Cancel it',
   keep: 'Keep',
@@ -290,6 +304,13 @@ const ZH: Strings = {
   staleLabel: '可能過時',
   checkedLast: '最後驗證',
   seenInOutput: '從輸出看到',
+  confirmedByYou: '你確認',
+  unmatchedLabel: '未對上證據',
+  unclearLabel: '檢查不明確',
+  yourCallLabel: '由你確認',
+  autoConfirmed: ids => `依你的話勾選 ${ids.join('、')}`,
+  autoUnmatched: ids => `${ids.join('、')} 的勾選對不上證據`,
+  autoUnclear: ids => `${ids.join('、')} 的檢查方式不明確`,
   confirmCancelItem: '取消這一項？',
   cancelYes: '取消它',
   keep: '保留',
@@ -392,6 +413,13 @@ const JA: Strings = {
   staleLabel: '古い可能性あり',
   checkedLast: '最後に確認',
   seenInOutput: '出力で確認',
+  confirmedByYou: 'あなたが確認',
+  unmatchedLabel: '証拠と一致せず',
+  unclearLabel: '確認方法が不明確',
+  yourCallLabel: 'あなたが確認',
+  autoConfirmed: ids => `あなたの言葉で ${ids.join('、')} をチェック`,
+  autoUnmatched: ids => `${ids.join('、')} のチェックに証拠が見当たらない`,
+  autoUnclear: ids => `${ids.join('、')} の確認方法が不明確`,
   confirmCancelItem: 'この項目を取り消しますか？',
   cancelYes: '取り消す',
   keep: '残す',

@@ -281,9 +281,14 @@ function statusText(list: readonly Intent[], one: Intent): string {
     const met = parts.filter(part => part.isMet).length
     return met === parts.length ? `met (all ${met} parts)` : `open (${met}/${parts.length} parts met)`
   }
-  if (one.isMet) return `met${one.isAuto ? ' (seen in output)' : ''}`
+  if (one.isMet) {
+    const how = one.byPerson ? ' (confirmed by the person)' : one.isAuto ? ' (seen in output)' : ''
+    return `met${how}${one.unmatched ? ` [EVIDENCE NOT MATCHED: ${one.unmatched}; rerun the check or reopen]` : ''}`
+  }
   const flags = [
     one.isActive ? 'ACTIVE' : '',
+    isUnclear(one) ? 'CHECK UNCLEAR: no result could prove it, rewrite it' : '',
+    isYourCall(one) ? "PERSON'S CALL: only their answer can confirm it, ask them" : '',
     one.isStale ? 'STALE: may no longer apply, re-plan' : '',
     one.atEnd ? 'checked last' : '',
     partsOf(list, one.id).length === 0 && !isFalsifiable(one.check) ? 'VAGUE CHECK: rewrite it as something that could fail' : '',
@@ -461,6 +466,9 @@ export function briefText(p: Purpose, list: readonly Intent[]): string {
   const state = (one: Intent) =>
     (one.isMet ? 'met' : one.isStale ? 'stale' : one.isActive ? 'active' : one.isAuto ? 'open, auto' : 'open') +
     (one.atEnd && !one.isMet ? ', last' : '') +
+    (one.isMet && one.unmatched ? ', EVIDENCE NOT MATCHED' : '') +
+    (isUnclear(one) ? ', CHECK UNCLEAR' : '') +
+    (isYourCall(one) ? ", PERSON'S CALL" : '') +
     (!one.isMet && partsOf(list, one.id).length === 0 && !isFalsifiable(one.check) ? ', VAGUE CHECK' : '')
   const live = list.filter(one => isRequest(one) && isLive(one))
   const finished: string[] = []
@@ -514,6 +522,16 @@ export function isFalsifiable(check: string): boolean {
   for (const word of GENERIC_CJK) rest = rest.split(word).join(' ')
   const words = rest.split(/[^a-z0-9_.\u3400-\u9fff-]+/).filter(w => w && !GENERIC.has(w))
   return weight(words.join('')) >= 4
+}
+
+/** The observer read this item's current check and found no result could prove it. */
+export function isUnclear(one: Intent): boolean {
+  return !one.isMet && one.checkKind === 'none' && one.checkJudged === one.check
+}
+
+/** The observer read this item's current check as one only the person's answer can settle. */
+export function isYourCall(one: Intent): boolean {
+  return !one.isMet && one.checkKind === 'person' && one.checkJudged === one.check
 }
 
 /**
