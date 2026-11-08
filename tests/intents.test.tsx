@@ -1545,7 +1545,7 @@ test('finished parts fold under their request (▸ opens them) and show green; r
   expect(shown).toContain('◐ 1. 草稿不再消失 1/3')
   expect(shown.some(x => x.includes('1a.'))).toBe(false)
   expect(shown).toContain('  ○ 1b. 切換筆記本後草稿還在')
-  expect((await pane.find({ type: 'Button', key: 'fold-1' }))?.text).toBe('▸')
+  expect((await pane.find({ type: 'Button', key: 'fold-1' }))?.text).toBe('>')
   await pane.press({ key: 'fold-1' })
   shown = await texts(pane)
   expect(shown).toContain('  ✓ 1a. 關掉 app 後草稿還在')
@@ -1586,4 +1586,19 @@ test("Claude recording words the observer already recorded takes that entry's pl
   expect('deny' in withdrawn).toBe(false)
   saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
   expect(saved.intents.find(one => one.id === auto.id)?.closed).toMatchObject({ as: 'cancelled', by: 'claude' })
+})
+
+test('every top-level item starts with a mark of the same width: ">" (or "v" when open) with parts, "-" without', async ($, on) => {
+  engine(on)
+  await seedParts($)
+  ui.messages = [...ui.messages, { role: 'user', text: '桌面版也要能用', toolUses: [] }]
+  await $.tool.call({ tool: ADD, intents: [{ summary: '桌面版可用', check: 'x', source: '桌面版也要能用' }] } as never)
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Button', key: 'fold-1' }))?.text).toBe('>')
+  // Request 2 has no parts: "-", not a button.
+  expect(await pane.find({ type: 'Button', key: 'fold-2' })).toBeUndefined()
+  expect((await pane.findAll({ type: 'Text' })).some(one => one.text === '-')).toBe(true)
+  await pane.press({ key: 'fold-1' })
+  expect((await pane.find({ type: 'Button', key: 'fold-1' }))?.text).toBe('v')
+  await pane.unmount()
 })

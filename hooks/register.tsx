@@ -1387,11 +1387,15 @@ export const register: Register = on => {
     const details = await read($, shownDetails)
     const opened = new Set(await read($, expanded))
     const toggleOpen = (id: string) => update($, expanded, list => (list.includes(id) ? list.filter(x => x !== id) : [...list, id]))
-    /** ▸ / ▾ before a request with finished parts: shows or folds them. */
+    /**
+     * One mark of the same width before every top-level item, so they all line
+     * up: ">" (folded) / "v" (open) for an item with parts, pressed to show or
+     * fold its finished parts; "-" for one without.
+     */
     const foldButton = (one: Intent) => {
-      const doneParts = partsOf(list, one.id).filter(part => part.isMet).length
-      if (one.parent || doneParts === 0) return null
-      return <Button key={`fold-${one.id}`} label={opened.has(one.id) ? '▾' : '▸'} plain dimColor onPress={() => toggleOpen(one.id)} />
+      if (one.parent) return null
+      if (partsOf(list, one.id).length === 0) return <Text dimColor>-</Text>
+      return <Button key={`fold-${one.id}`} label={opened.has(one.id) ? 'v' : '>'} plain dimColor onPress={() => toggleOpen(one.id)} />
     }
     const where = await read($, stage)
     const live = list.filter(isLive)
@@ -1851,6 +1855,7 @@ export const register: Register = on => {
         {limits.map(one => (
           <Box key={`limit-${one.id}`} flexDirection="column">
             <Box flexDirection="row" gap={1}>
+              {foldButton(one)}
               <Text color={one.broken ? 'red' : one.isAuto ? 'yellow' : undefined} wrap="wrap">
                 {one.broken ? '✗' : '🛡'} {one.id}. {one.ai}
                 {one.broken?.isAuto || one.isAuto ? t.paren(t.autoMark) : ''}
