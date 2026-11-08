@@ -1217,7 +1217,8 @@ export const register: Register = on => {
           return changed
         })
         if (cancel && one && !one.closed) {
-          const by: Actor = isRequest(one) ? 'person' : 'claude'
+          // The person's word cancels a request; Claude withdrawing an unconfirmed auto entry, or a part, is Claude's.
+          const by: Actor = isRequest(one) && !one.isAuto ? 'person' : 'claude'
           next = close(next, id, { as: 'cancelled', reason: cancel, by, at })
         }
         if (args.restore === true) next = restore(next, id, at, 'claude')

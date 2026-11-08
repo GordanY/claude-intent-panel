@@ -1585,5 +1585,5 @@ test("Claude recording words the observer already recorded takes that entry's pl
   const withdrawn = await $.tool.call({ tool: REVISE, id: auto.id, cancel: '重複' } as never)
   expect('deny' in withdrawn).toBe(false)
   saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
-  expect(saved.intents.find(one => one.id === auto.id)?.closed?.as).toBe('cancelled')
+  expect(saved.intents.find(one => one.id === auto.id)?.closed).toMatchObject({ as: 'cancelled', by: 'claude' })
 })
