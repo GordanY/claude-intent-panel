@@ -27,6 +27,9 @@ const SAVED = {
   drift: null,
 }
 
+/** Panes the engine holds open, and how many times the mod opened one. */
+const ui = { up: new Set<string>(), opens: 0 }
+
 /** The engine beneath the mod; `dirs` are the folders that exist. */
 function engine(on: On, initial: Record<string, unknown> = {}, dirs: string[] = [ROOT, '/repo/.claude/worktrees']) {
   const store = new Map<string, unknown>(Object.entries(initial))
@@ -42,7 +45,20 @@ function engine(on: On, initial: Record<string, unknown> = {}, dirs: string[] = 
   on('store.keys', () => ({ value: [...store.keys()] }))
   on('tool.register', () => ({ value: {} }))
   on('command.register', () => ({ value: { command: 'intents' } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  ui.up.clear()
+  ui.opens = 0
+  on('ui.open', (_, e) => {
+    ui.up.add(e.id)
+    ui.opens += 1
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', (_, e) => {
+    ui.up.delete(e.id)
+    return { value: undefined }
+  })
+  on('ui.panes', () => ({
+    value: [...ui.up].map(id => ({ id, title: '', isShown: true, isFocused: false, isPlaced: true })),
+  }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('fs.stat', (_, e) => {
@@ -187,4 +203,56 @@ test('an off-list turn raises a drift warning that can be added to the list', as
   expect(await ui.find({ type: 'Text', text: /偏題/ })).toBeUndefined()
   expect((await ui.find({ type: 'Text', text: /已達成/ }))?.text).toBe('已達成 0/3')
   await ui.unmount()
+})
+
+test('a pane the person closed is not reopened by list changes, only by /intents', async ($, on) => {
+  engine(on)
+  // The mod's ui.close hook sets this value when the person closes the pane;
+  // the kit raises no ui.close of its own, so the test stands in for it.
+  let closedByPerson = false
+  on('state.get', { plugin: 'intent-tracker', key: 'isClosedByPerson' } as never, (_, e, next) =>
+    closedByPerson ? { value: { value: true, version: 1 } } : next(e),
+  )
+  await seed($)
+
+  ui.up.delete('intents')
+  closedByPerson = true
+  const before = ui.opens
+  await $.tool.call({ tool: MET, id: '1', evidence: '測試通過' } as never)
+  await $.tool.call({ tool: ADD, intents: [{ summary: '多一個目標', check: '看得到' }] } as never)
+  expect(ui.opens).toBe(before)
+  expect(ui.up.has('intents')).toBe(false)
+
+  closedByPerson = false
+  await $.command.run({ command: 'intents', args: '' } as never)
+  expect(ui.up.has('intents')).toBe(true)
+  await $.tool.call({ tool: MET, id: '2', evidence: '看到了' } as never)
+  expect(ui.opens).toBe(before + 2)
+})
+
+test("the refresh button asks Claude to redo the AI side only, and the person's words stay", async ($, on) => {
+  const store = engine(on)
+  const submitted: string[] = []
+  on('prompt.submit', (_, e) => {
+    submitted.push(e.text)
+    return { text: e.text, context: e.context }
+  })
+  await seed($)
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.input({ key: 'mine-1', text: '草稿絕對不能不見' })
+  await pane.press({ key: 'refresh-ai' })
+  await pane.unmount()
+  expect(submitted.some(t => t.includes('重新整理目標面板裡的 AI 內容') && t.includes('不要改動我自己寫的字'))).toBe(true)
+
+  // What the model does with it: revise the purpose and a goal's summary.
+  await $.tool.call({ tool: 'mcp__intent-tracker__intent_revise', purpose: '讓草稿永遠不會消失' } as never)
+  await $.tool.call({ tool: 'mcp__intent-tracker__intent_revise', id: '1', summary: '關掉再打開 app，草稿都還在' } as never)
+  const saved = store.get(`wt:${ROOT}`) as typeof SAVED
+  expect(saved.purpose.ai).toBe('讓草稿永遠不會消失')
+  expect(saved.intents[0]?.ai).toBe('關掉再打開 app，草稿都還在')
+  expect(saved.intents[0]?.mine).toBe('草稿絕對不能不見')
+
+  const refused = await $.tool.call({ tool: 'mcp__intent-tracker__intent_revise' } as never)
+  expect('deny' in refused && typeof refused.deny === 'string').toBe(true)
 })

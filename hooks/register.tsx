@@ -27,6 +27,12 @@ const drift = atom({ plugin: 'intent-tracker', key: 'drift' } as const, null as 
 const editing = atom({ plugin: 'intent-tracker', key: 'editing' } as const, null as string | null)
 const isDirty = atom({ plugin: 'intent-tracker', key: 'isDirty' } as const, false)
 const loadedRoot = atom({ plugin: 'intent-tracker', key: 'loadedRoot' } as const, null as string | null)
+const isClosedByPerson = atom({ plugin: 'intent-tracker', key: 'isClosedByPerson' } as const, false)
+
+const REFRESH_PROMPT =
+  '（目標面板）請依目前的對話，重新整理目標面板裡的 AI 內容：原意和每個目標的白話摘要、檢查方式、打勾狀態。' +
+  `用 ${TOOL('intent_revise')} 更新（原意用它的 purpose 欄位）；檢查其實沒有通過的目標用 reopen 取消打勾，確實通過但還沒勾的用 ${TOOL('intent_met')} 補上依據。` +
+  '不要改動我自己寫的字；我的字跟你的摘要不一致時，以我的字為準。整理完用一兩句話告訴我改了什麼。'
 
 type Saved = { purpose: Purpose; intents: Intent[]; drift: Drift | null }
 
@@ -83,16 +89,16 @@ const toolSpecs = [
   {
     name: 'intent_revise',
     description:
-      "Change a goal's summary or check (e.g. to match the person's own words), or reopen a met goal that later work broke.",
+      "Change the purpose line, or a goal's summary or check (e.g. to match the person's own words), or reopen a met goal whose check no longer holds. Never touches the person's own words.",
     inputSchema: {
       type: 'object',
       properties: {
-        id: { type: 'string' },
+        purpose: { type: 'string', description: 'New plain Traditional Chinese purpose line.' },
+        id: { type: 'string', description: 'The goal to change; omit when changing only the purpose.' },
         summary: { type: 'string' },
         check: { type: 'string' },
         reopen: { type: 'boolean' },
       },
-      required: ['id'],
     },
     isDeferred: false,
   },
@@ -125,7 +131,15 @@ function asSaved(value: unknown): Saved | null {
   return { purpose: v.purpose, intents: v.intents, drift: v.drift ?? null }
 }
 
-async function refreshTitle($: EngineInterface): Promise<void> {
+/**
+ * Keeps the pane's title (met/total) current. An open pane is retitled; a
+ * closed one is opened only when the person asks, or when they have not
+ * closed it by hand in this session.
+ */
+async function refreshTitle($: EngineInterface, isAsked = false): Promise<void> {
+  if (isAsked) await update($, isClosedByPerson, () => false)
+  const isUp = (await $.ui.panes()).some(pane => pane.id === PANE)
+  if (!isUp && !isAsked && (await read($, isClosedByPerson))) return
   const list = await read($, intents)
   const met = list.filter(one => one.isMet).length
   const title = list.length === 0 ? '🎯 本次目標' : `🎯 本次目標 ${met}/${list.length}`
@@ -265,9 +279,17 @@ export const register: Register = on => {
 
   on('command.run', { command: 'intents' }, async $ => {
     await sync($)
-    await refreshTitle($)
+    await refreshTitle($, true)
 
     return { text: '已打開本次目標面板。' }
+  })
+
+  // Closed by the person: list changes stop reopening it until they ask again.
+  // (This mod never closes its own pane, so any close but an unload is theirs.)
+  on('ui.close', async ($, e, next) => {
+    if (e.id === PANE && e.origin.kind !== 'unload') await update($, isClosedByPerson, () => true)
+
+    return next(e)
   })
 
   on('prompt.compose', async ($, e, next) => {
@@ -335,8 +357,11 @@ export const register: Register = on => {
     await sync($)
     const args = e as unknown as Record<string, unknown>
     const id = str(args.id)
+    const newPurpose = str(args.purpose)
     const list = await read($, intents)
-    if (!list.some(one => one.id === id)) return { deny: `No goal with id "${id}".\n${listText(await read($, purpose), list)}` }
+    if (!id && !newPurpose) return { deny: `Give a goal id, a purpose, or both.\n${listText(await read($, purpose), list)}` }
+    if (id && !list.some(one => one.id === id)) return { deny: `No goal with id "${id}".\n${listText(await read($, purpose), list)}` }
+    if (newPurpose) await update($, purpose, p => ({ ...p, ai: newPurpose }))
     await update($, intents, l =>
       l.map(one => {
         if (one.id !== id) return one
@@ -432,7 +457,18 @@ export const register: Register = on => {
           <Button key="clear-no" label="取消" onPress={() => update($, editing, () => null)} />
         </Box>
       ) : (
-        <Box flexDirection="row">
+        <Box flexDirection="row" gap={2}>
+          <Button
+            key="refresh-ai"
+            label="重新整理 AI 內容"
+            plain
+            onPress={async () => {
+              // A turn of its own once the session is idle; the model may change
+              // only the AI side (purpose, summaries, checks, ticks).
+              await $.prompt.submit({ text: REFRESH_PROMPT })
+              $.ui.toast('已請 Claude 重新整理 AI 內容（你寫的字不會動）')
+            }}
+          />
           <Button key="clear" label="清空清單" plain dimColor onPress={() => update($, editing, () => 'confirm-clear')} />
         </Box>
       )

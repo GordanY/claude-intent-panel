@@ -28,6 +28,8 @@ declare module 'claude-code' {
       isDirty: boolean
       /** The worktree root whose saved list is loaded; null before the first load. */
       loadedRoot: string | null
+      /** The person closed the pane by hand in this session: list changes no longer reopen it. */
+      isClosedByPerson: boolean
     }
   }
 }
