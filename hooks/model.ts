@@ -81,9 +81,8 @@ export function withLetters(list: readonly Intent[]): Intent[] {
 export function labelOf(list: readonly Intent[], one: Intent): string {
   if (!one.parent) return one.id
   if (one.letter) return `${one.parent}${one.letter}`
-  const siblings = list.filter(x => x.parent === one.parent && (isLive(x) || x.id === one.id))
-  const n = Math.max(0, siblings.findIndex(x => x.id === one.id))
-  return `${one.parent}${n < 26 ? String.fromCharCode(97 + n) : `-${n + 1}`}`
+  // Not lettered yet: the letter it will get, the next one unused under its request (never one a sibling holds).
+  return `${one.parent}${withLetters(list).find(x => x.id === one.id)?.letter ?? '?'}`
 }
 
 /** An item named by its id ("3") or its label ("1b"). */

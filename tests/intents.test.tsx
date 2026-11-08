@@ -147,8 +147,8 @@ test('goals show in the pane, tick once their check passes, and are saved for th
 
   let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 0/2')).toBe(true)
-  expect((await ui.find({ type: 'Text', text: /草稿要保留/ }))?.text).toBe('○ 1. 關掉 app 後草稿要保留')
-  expect((await ui.find({ type: 'Text', text: /檢查：DraftPersist/ }))?.text).toBe('  檢查：DraftPersistTests 通過')
+  expect((await lineOf(ui, /草稿要保留/))).toBe('○ 1. 關掉 app 後草稿要保留')
+  expect((await ui.find({ type: 'Text', text: /檢查：DraftPersist/ }))?.text).toBe('檢查：DraftPersistTests 通過')
   // No field for the person's words until they press ✎.
   expect(await ui.find({ type: 'Input' })).toBeUndefined()
   await ui.unmount()
@@ -165,11 +165,11 @@ test('goals show in the pane, tick once their check passes, and are saved for th
   expect(await ui.find({ type: 'Text', text: /草稿要保留/ })).toBeUndefined()
   expect((await ui.find({ type: 'Button', key: 'done-toggle' }))?.text).toBe('✓ 已完成 1 項 ▸')
   await ui.press({ key: 'done-toggle' })
-  expect((await ui.find({ type: 'Text', text: /草稿要保留/ }))?.text).toBe('✓ 1. 關掉 app 後草稿要保留')
+  expect((await lineOf(ui, /草稿要保留/))).toBe('✓ 1. 關掉 app 後草稿要保留')
   // The evidence is not listed under each done item; ⋯ shows it on demand.
   expect(await ui.find({ type: 'Text', text: /依據/ })).toBeUndefined()
   await ui.press({ key: 'details-1' })
-  expect((await ui.find({ type: 'Text', text: /依據/ }))?.text).toBe('  依據：DraftPersistTests 3/3 通過')
+  expect((await ui.find({ type: 'Text', text: /依據/ }))?.text).toBe('依據：DraftPersistTests 3/3 通過')
   await ui.unmount()
 
   const saved = (store.get(`wt:${ROOT}`)) as typeof SAVED
@@ -185,7 +185,7 @@ test("the person's own words show and reach the model once", async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'edit-1' })
   await ui.input({ key: 'mine-1', text: '草稿絕對不能不見' })
-  expect((await ui.find({ type: 'Text', text: /你：草稿/ }))?.text).toBe('  你：草稿絕對不能不見')
+  expect((await ui.find({ type: 'Text', text: /你：草稿/ }))?.text).toBe('你：草稿絕對不能不見')
   expect(await ui.find({ type: 'Input' })).toBeUndefined()
   await ui.unmount()
 
@@ -205,7 +205,7 @@ test('a resumed session shows the list saved for its worktree and tells the mode
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/1')).toBe(true)
   await ui.press({ key: 'done-toggle' })
-  expect((await ui.find({ type: 'Text', text: /草稿絕對不能不見/ }))?.text).toBe('✓ 1. 草稿絕對不能不見')
+  expect((await lineOf(ui, /草稿絕對不能不見/))).toBe('✓ 1. 草稿絕對不能不見')
   await ui.unmount()
 
   const first = await $.prompt.submit({ text: '繼續昨天的' })
@@ -630,7 +630,7 @@ test('a language another session picks is applied here', async ($, on) => {
   await ui.clock.advance(2_000)
 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /Check/ }))?.text).toBe('  Check: DraftPersistTests 通過')
+  expect((await pane.find({ type: 'Text', text: /Check/ }))?.text).toBe('Check: DraftPersistTests 通過')
   await pane.unmount()
 })
 
@@ -645,7 +645,7 @@ test('a desktop-app session (SDK-hosted, no surface at start) turns on when the 
   expect(ui.registered).toBe(4)
   await $.tool.call({ tool: ADD, purpose: '桌面版也能用', intents: [{ summary: '面板出現', check: '看得到', source: '面板出現' }] } as never)
   const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await pane.find({ type: 'Text', text: /面板出現/ }))?.text).toBe('○ 1. 面板出現')
+  expect((await lineOf(pane, /面板出現/))).toBe('○ 1. 面板出現')
   await pane.unmount()
 })
 
@@ -806,7 +806,7 @@ test("after a turn, a goal its output shows passing is ticked and counted at onc
   expect((await pane.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
   expect((await pane.find({ type: 'Button', key: 'done-toggle' }))?.text).toBe('✓ 已完成 1 項（1 項從輸出看到） ▸')
   await pane.press({ key: 'done-toggle' })
-  expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.text).toBe('✓ 1. 關掉 app 後草稿要保留（從輸出看到）')
+  expect((await lineOf(pane, /草稿要保留/))).toBe('✓ 1. 關掉 app 後草稿要保留（從輸出看到）')
   await pane.unmount()
 
   // Claude reads the auto tick beside the next prompt and confirms it.
@@ -848,8 +848,35 @@ function heldTools(on: On, result: (e: Record<string, unknown>) => unknown = () 
 }
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
 
-async function texts(pane: { findAll: (q: { type: string }) => Promise<{ text?: string }[]> }) {
-  return (await pane.findAll({ type: 'Text' })).map(one => one.text ?? '')
+type Found = { key?: string; text?: string; props: Record<string, unknown> }
+type Findable = { findAll: (q: { type: string }) => Promise<Found[]> }
+
+/**
+ * The pane's lines as read: every Text, except that an item's line (its head "○ 1." and its words, drawn in two
+ * columns so wrapped words line up) reads as one: "○ 1. words".
+ */
+async function texts(pane: Findable) {
+  const heads = new Map<string, string>()
+  for (const box of await pane.findAll({ type: 'Box' })) {
+    if (!box.key?.startsWith('line-')) continue
+    heads.set(box.text ?? '', box.key)
+  }
+  const all = (await pane.findAll({ type: 'Text' })).map(one => one.text ?? '')
+  const out: string[] = []
+  for (let i = 0; i < all.length; i += 1) {
+    const head = all[i] ?? ''
+    const body = all[i + 1] ?? ''
+    if (heads.has(head + body) && /^[○●◐✓⊘] /.test(head)) {
+      out.push(`${head} ${body}`)
+      i += 1
+    } else out.push(head)
+  }
+  return out
+}
+
+/** The one line that matches, as `texts` reads it. */
+async function lineOf(pane: Findable, re: RegExp) {
+  return (await texts(pane)).find(line => re.test(line))
 }
 
 test("a request must quote the person; Claude's own ideas and technical steps are refused", async ($, on) => {
@@ -899,8 +926,8 @@ test('a request breaks into parts; progress counts the parts and the request is 
   let shown = await texts(pane)
   expect(shown.some(x => x.endsWith(' 1/2') && /[▓░]/.test(x))).toBe(true)
   expect(shown).toContain('◐ 1. 草稿不再消失 1/2')
-  expect(shown).toContain('  ✓ 1a. 關掉 app 後草稿還在')
-  expect(shown).toContain('  ○ 1b. 切換筆記本後草稿還在')
+  expect(shown).toContain('✓ 1a. 關掉 app 後草稿還在')
+  expect(shown).toContain('○ 1b. 切換筆記本後草稿還在')
   await pane.unmount()
 
   await $.tool.call({ tool: MET, id: '1b', evidence: 'SwitchTests 2/2' } as never)
@@ -928,7 +955,7 @@ test('a list saved with old "limits" loads them as ordinary goals, open, with th
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const shown = await texts(pane)
   expect(shown).toContain('○ 1. 同步不受影響')
-  expect(shown).toContain('  檢查：diff 不含 Sync/')
+  expect(shown).toContain('檢查：diff 不含 Sync/')
   expect(shown.some(x => x.includes('規則') || x.includes('限制') || x.includes('✗'))).toBe(false)
   await pane.unmount()
   // An ordinary goal now: it can be ticked.
@@ -995,7 +1022,7 @@ test('the person cancels in the pane; ⋯ shows their words, never a history', a
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await pane.press({ key: 'details-1' })
   let shown = await texts(pane)
-  expect(shown).toContain('  你說：「關掉 app 後草稿要保留」')
+  expect(shown).toContain('你說：「關掉 app 後草稿要保留」')
   // No history in the pane: the latest only.
   expect(shown.some(x => x.includes('歷史') || x.includes('Claude · 加入'))).toBe(false)
   await pane.press({ key: 'cancel-2' })
@@ -1094,7 +1121,7 @@ test('several parts can be worked on at once, each showing its own activity; a s
     () => $.tool.call({ tool: 'Read', file_path: 'Switch.swift', agentId: 'ag-1' } as never),
     async () => {
       const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-      expect(await texts(pane)).toContain('  ● 1b. 切換筆記本後草稿還在  現在：調查')
+      expect(await texts(pane)).toContain('● 1b. 切換筆記本後草稿還在  現在：調查')
       await pane.unmount()
     },
   )
@@ -1103,8 +1130,8 @@ test('several parts can be worked on at once, each showing its own activity; a s
     async () => {
       const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
       const shown = await texts(pane)
-      expect(shown).toContain('  ● 1a. 關掉 app 後草稿還在  現在：實作')
-      expect(shown).toContain('  ● 1b. 切換筆記本後草稿還在  現在：思考中')
+      expect(shown).toContain('● 1a. 關掉 app 後草稿還在  現在：實作')
+      expect(shown).toContain('● 1b. 切換筆記本後草稿還在  現在：思考中')
       await pane.unmount()
     },
   )
@@ -1112,9 +1139,9 @@ test('several parts can be worked on at once, each showing its own activity; a s
   // Both tools have returned: both loops are thinking now.
   let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   let shown = await texts(pane)
-  expect(shown).toContain('  ● 1a. 關掉 app 後草稿還在  現在：思考中')
-  expect(shown).toContain('  ● 1b. 切換筆記本後草稿還在  現在：思考中')
-  expect(shown).toContain('  ○ 1c. 同步照常')
+  expect(shown).toContain('● 1a. 關掉 app 後草稿還在  現在：思考中')
+  expect(shown).toContain('● 1b. 切換筆記本後草稿還在  現在：思考中')
+  expect(shown).toContain('○ 1c. 同步照常')
   // With activity on the parts, no separate stage line under the bar.
   expect(shown.some(x => x.startsWith('現在：'))).toBe(false)
   await pane.unmount()
@@ -1123,13 +1150,13 @@ test('several parts can be worked on at once, each showing its own activity; a s
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 's', reason: 'answer', agentId: 'ag-1' } as never)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   shown = await texts(pane)
-  expect(shown).toContain('  ● 1b. 切換筆記本後草稿還在')
+  expect(shown).toContain('● 1b. 切換筆記本後草稿還在')
   // Ticking a part ends its focus.
   await pane.unmount()
   await $.tool.call({ tool: MET, id: '1a', evidence: '3/3' } as never)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await pane.press({ key: 'fold-1' })
-  expect(await texts(pane)).toContain('  ✓ 1a. 關掉 app 後草稿還在')
+  expect(await texts(pane)).toContain('✓ 1a. 關掉 app 後草稿還在')
   await pane.unmount()
 })
 
@@ -1156,7 +1183,7 @@ test("Claude's changes to parts are told in one notice at the end of the turn; l
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const shown = await texts(pane)
   // Moved first, it keeps its label; nobody else's label changed.
-  expect(shown.filter(x => /^  ○ 1/.test(x))).toEqual(['  ○ 1d. 當機後草稿還在', '  ○ 1a. 關掉 app 後草稿還在', '  ○ 1b. 切換筆記本後草稿還在'])
+  expect(shown.filter(x => /^○ 1[a-z]/.test(x))).toEqual(['○ 1d. 當機後草稿還在', '○ 1a. 關掉 app 後草稿還在', '○ 1b. 切換筆記本後草稿還在'])
   await pane.unmount()
   expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.find(one => one.ai === '同步照常')?.closed?.as).toBe('cancelled')
 })
@@ -1205,8 +1232,8 @@ test('a result wakes the observer: it ticks what the output shows and flags a pa
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await pane.press({ key: 'fold-1' })
   const shown = await texts(pane)
-  expect(shown).toContain('  ✓ 1a. 關掉 app 後草稿還在（從輸出看到）')
-  expect(shown).toContain('  ○ 1b. 切換筆記本後草稿還在（可能過時）')
+  expect(shown).toContain('✓ 1a. 關掉 app 後草稿還在（從輸出看到）')
+  expect(shown).toContain('○ 1b. 切換筆記本後草稿還在（可能過時）')
   await pane.unmount()
 
   // Claude re-plans the stale part: the flag clears.
@@ -1470,7 +1497,7 @@ test("a small follow-up to a request goes under it with the person's words, and 
   const shown = await texts(pane)
   // Request 1 is open again: its follow-up is not done.
   expect(shown).toContain('○ 1. 關掉 app 後草稿要保留 0/1')
-  expect(shown).toContain('  ○ 1a. 當機後草稿還在')
+  expect(shown).toContain('○ 1a. 當機後草稿還在')
   await pane.unmount()
 })
 
@@ -1556,12 +1583,12 @@ test('finished parts fold under their request (▸ opens them) and show green; r
   let shown = await texts(pane)
   expect(shown).toContain('◐ 1. 草稿不再消失 1/3')
   expect(shown.some(x => x.includes('1a.'))).toBe(false)
-  expect(shown).toContain('  ○ 1b. 切換筆記本後草稿還在')
+  expect(shown).toContain('○ 1b. 切換筆記本後草稿還在')
   expect((await pane.find({ type: 'Button', key: 'fold-1' }))?.text).toBe('>')
   await pane.press({ key: 'fold-1' })
   shown = await texts(pane)
-  expect(shown).toContain('  ✓ 1a. 關掉 app 後草稿還在')
-  expect((await pane.find({ type: 'Text', text: /1a\. 關掉/ }))?.props.color).toBe('green')
+  expect(shown).toContain('✓ 1a. 關掉 app 後草稿還在')
+  expect((await pane.find({ type: 'Text', text: /^關掉 app 後草稿還在/ }))?.props.color).toBe('green')
   await pane.press({ key: 'fold-1' })
   expect((await texts(pane)).some(x => x.includes('1a.'))).toBe(false)
   await pane.unmount()
@@ -1807,7 +1834,7 @@ test('a subagent links only to the part it was named for: short words link nothi
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const shown = await texts(pane)
   // ag-1 fits 1b; "review" is too short to claim ag-2, which shows on its own.
-  expect(shown).toContain('  ● 1b. 切換筆記本後草稿還在  現在：思考中')
+  expect(shown).toContain('● 1b. 切換筆記本後草稿還在  現在：思考中')
   expect(shown.some(x => x.includes('1a.') && x.includes('現在'))).toBe(false)
   expect(shown).toContain('  子代理「code review of sync」：思考中')
   await pane.unmount()
@@ -1957,7 +1984,7 @@ test('a goal true from the start ("sync stays untouched") is checked last: nobod
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
   await ui.clock.settle()
   let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await texts(pane)).toContain('  ○ 1b. 同步沒有被動到（最後驗證）')
+  expect(await texts(pane)).toContain('○ 1b. 同步沒有被動到（最後驗證）')
   await pane.unmount()
   // Once the rest is done, it can be ticked.
   await $.tool.call({ tool: MET, id: '1a', evidence: 'DraftPersistTests 3/3' } as never)
@@ -2049,7 +2076,7 @@ test('a removed item that holds your words shows in a folded "removed" section, 
   await pane.press({ key: 'removed-toggle' })
   const shown = await texts(pane)
   expect(shown).toContain('⊘ 1. 關掉 app 後草稿要保留（已取消）')
-  expect(shown).toContain('  你：草稿一定要留著')
+  expect(shown).toContain('你：草稿一定要留著')
   expect(shown.some(x => x.includes('不要動到同步'))).toBe(false)
   await pane.press({ key: 'restore-1' })
   expect((await texts(pane)).some(x => x.startsWith('○ 1. 關掉 app 後草稿要保留'))).toBe(true)
@@ -2116,7 +2143,7 @@ test('your own words survive every change: tools, ticks, the observer, cancel an
   expect(mineOf('p1')).toBe('分項的我的話')
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await pane.press({ key: 'removed-toggle' })
-  expect(await texts(pane)).toContain('  你：需求的我的話')
+  expect(await texts(pane)).toContain('你：需求的我的話')
   await pane.unmount()
 })
 
@@ -2449,7 +2476,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(card?.props.borderStyle).toBe('round')
       expect(card?.props.flexDirection).toBe('column')
     }
-    expect((await pane.find({ type: 'Box', key: 'card-1' }))?.text).toContain('1a. 草稿存檔')
+    expect((await pane.find({ type: 'Box', key: 'card-1' }))?.text).toContain('草稿存檔')
+    expect(await lineOf(pane, /草稿存檔/)).toBe('○ 1a. 草稿存檔')
     expect((await pane.find({ type: 'Box', key: 'card-1' }))?.text).not.toContain('不要動到同步')
     // The footer: a divider, the times and models on one line, the settings together on the next.
     expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('剛剛 · 整理 Opus 5.5')
@@ -2465,3 +2493,87 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await pane.unmount()
   })
 }
+
+test('a command already tracked before it ended still leaves once its output shows the exit line', async ($, on) => {
+  engine(on)
+  const path = '/tmp/t/old.output'
+  const running = heldTools(on, e => (e.run_in_background ? { result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bg-old' } } : { result: 'ok' }))
+  // Its output was never read for its end (as before this check existed): reads fail at first.
+  let isReadable = false
+  on('fs.read', () => {
+    if (!isReadable) throw new Error('EACCES')
+    return { value: 'waiting…\nno new desktop session within 10 min\n\n[exited with code 0]\n' } as never
+  })
+  await running(() => seed($), async () => {})
+  await running(() => $.tool.call({ tool: 'Bash', command: 'sleep 600', description: 'wait for next desktop session', run_in_background: true } as never), async () => {})
+  ui.messages = [ASK, { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'w', tool: 'Bash', input: {}, text: `Command running in background with ID: bg-old. Output is being written to: ${path}.` }] }]
+  ui.files[path] = 7
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+  const shows = async () => {
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const all = (await texts(pane)).join('\n')
+    await pane.unmount()
+    return all.includes('wait for next desktop session')
+  }
+  // Ended long ago, its file unchanged since it was first seen: still listed while unread…
+  expect(await shows()).toBe(true)
+  // …and gone once the end is read, though the file has not changed.
+  isReadable = true
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+  expect(await shows()).toBe(false)
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`wrapped words line up under the first word, never under the mark or the edge (${surface})`, async ($, on) => {
+    engine(on)
+    await seed($)
+    await $.tool.call({ tool: ADD, intents: [{ summary: '一個很長很長的分項，長到在窄的面板裡一定會換到第二行去', check: 'LongPartTests 通過', parent: '1' }] } as never)
+    await $.tool.call({ tool: MET, id: '2', evidence: 'git diff 不含 Sync/' } as never)
+    const pane = await $.ui.mount({ ...PANE, surface })
+    await pane.press({ key: 'done-toggle' })
+    const boxes = await pane.findAll({ type: 'Box' })
+    // Every item line: the head ("○ 1.") alone in its column, the words in a column of their own that wraps.
+    const lines = boxes.filter(box => box.key?.startsWith('line-'))
+    expect(lines.map(box => box.key).sort()).toEqual(['line-1', 'line-done-2', 'line-p1'])
+    for (const line of lines) {
+      expect(line.props.flexDirection).toBe('row')
+      const kids = line.children as { type?: string; props?: Record<string, unknown> }[]
+      expect(kids.length).toBe(2)
+      expect(kids[1]?.props?.flexShrink).toBe(1)
+      expect(JSON.stringify(kids[1])).toContain('"wrap":"wrap"')
+      expect(JSON.stringify(kids[0])).not.toContain('"wrap":"wrap"')
+    }
+    // The lines under an item start where its words do: the mark and its gap, the head, one space.
+    const under = (text: RegExp) => boxes.find(box => box.props.paddingLeft !== undefined && text.test(box.text ?? ''))?.props.paddingLeft
+    expect(under(/^檢查：diff 不含 Sync\//)).toBeUndefined() // (done: no check line)
+    expect(under(/^檢查：LongPartTests/)).toBe(2 + '○ 1a.'.length + 1)
+    // The part's own line is indented two under its request's, the mark lining up with the request's mark.
+    expect(boxes.find(box => box.props.paddingLeft !== undefined && box.text?.startsWith('○ 1a.'))?.props.paddingLeft).toBe(2)
+    await pane.unmount()
+  })
+}
+
+test('sections are divided and the tools and settings stay pinned at the bottom', async ($, on) => {
+  engine(on)
+  await seed($)
+  await $.tool.call({ tool: MET, id: '2', evidence: 'git diff 不含 Sync/' } as never)
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // A divider before the goals, before what is done, before the tools, and before the footer.
+  expect((await texts(pane)).filter(line => /^─+$/.test(line)).length).toBe(4)
+  // Docked: the page fills the room, the content at its top and the tools and settings at its bottom.
+  const page = await pane.find({ type: 'Box', key: 'page' })
+  expect(page?.props.minHeight).toBe(30)
+  expect(page?.props.justifyContent).toBe('space-between')
+  const kids = page?.children as { props?: { key?: string } }[]
+  expect(kids.map(kid => kid.props?.key ?? (kid as { key?: string }).key)).toEqual(['top', 'bottom'])
+  const bottom = await pane.find({ type: 'Box', key: 'bottom' })
+  for (const key of ['refresh-ai', 'drift-model', 'observer', 'lang', 'scheme']) expect(JSON.stringify(bottom?.children)).toContain(`"key":"${key}"`)
+  expect(JSON.stringify((await pane.find({ type: 'Box', key: 'top' }))?.children)).not.toContain('"key":"lang"')
+  await pane.unmount()
+  // Inline above the prompt: as tall as its content.
+  pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, placement: 'inline' }, surface: 'terminal' })
+  expect((await pane.find({ type: 'Box', key: 'page' }))?.props.minHeight).toBeUndefined()
+  await pane.unmount()
+})

@@ -168,7 +168,7 @@ const activity = atom({ plugin: 'intent-tracker', key: 'activity' } as const, {}
 /** Work still running beside the main loop, not shown on a part: background commands and subagents. */
 const background = atom(
   { plugin: 'intent-tracker', key: 'background' } as const,
-  {} as Record<string, { label: string; stage: StageKey; at: number; path?: string; lastOutputAt?: number }>,
+  {} as Record<string, { label: string; stage: StageKey; at: number; path?: string; lastOutputAt?: number; endReadAt?: number }>,
 )
 
 /** How long a background item may stay listed with no end seen. */
@@ -250,14 +250,19 @@ async function reconcile($: EngineInterface): Promise<void> {
     }
     // A finished command's output ends with its exit line ("[exited with code 0]", "[killed]"): it is over,
     // whether or not its notification reached this mod.
-    if (info.mtimeMs !== item.lastOutputAt) {
-      const text = info.size <= 4 * 1024 * 1024 ? await $.fs.read(path).catch(() => '') : ''
+    // Read again only when the file changed since it was last read for its end (one tracked before this check
+    // existed has never been read: it is read now).
+    let endReadAt = item.endReadAt
+    if (info.mtimeMs !== item.endReadAt) {
+      const text = info.size <= 4 * 1024 * 1024 ? await $.fs.read(path).catch(() => null) : null
       if (typeof text === 'string' && ENDED_OUTPUT.test(text.slice(-200))) {
         await update($, background, b => without(b, key))
         continue
       }
+      // A read that failed is tried again next time.
+      if (typeof text === 'string') endReadAt = info.mtimeMs
     }
-    await update($, background, b => (b[key] ? { ...b, [key]: { ...b[key], path, lastOutputAt: info.mtimeMs } } : b))
+    await update($, background, b => (b[key] ? { ...b, [key]: { ...b[key], path, lastOutputAt: info.mtimeMs, endReadAt } } : b))
   }
 }
 /** The last line Claude Code writes to a background command's output file when it ends. */
@@ -859,7 +864,7 @@ async function applyPersonWords(
       next = close(next, r.id, { as: 'replaced', reason: r.quote, by: 'person', at, replacedBy: fresh$.id, isAuto: true })
     }
     for (const a of adds) next = [...next, fresh(a)]
-    return next
+    return withLetters(next)
   })
   const t = strings(await read($, lang))
   const done = [
@@ -1823,12 +1828,24 @@ export const register: Register = on => {
     }
     // The terminal draws a line of box characters sized to the pane's columns;
     // a desktop (proportional font) wraps such a line, so it gets a 1px rule.
-    const rule =
+    const divider = (key: string) =>
       e.surface === 'terminal' || !('Svg' in table) ? (
-        <Text dimColor>{'─'.repeat(Math.max(8, Math.min(e.props.bodyColumns ?? 40, 60)))}</Text>
+        <Text key={key} dimColor>
+          {'─'.repeat(Math.max(8, Math.min(e.props.bodyColumns ?? 40, 60)))}
+        </Text>
       ) : (
-        <table.Svg key="rule" source={RULE_SVG} alt="" height={1} />
+        <table.Svg key={key} source={RULE_SVG} alt="" height={1} />
       )
+    // Docked beside the transcript, the pane fills its room: the tools and settings sit at its bottom edge, and
+    // only when the list is taller than the room do they move down with it (the end of the scroll). Seated inline
+    // above the prompt, it stays as tall as its content.
+    const fill = e.props.placement === 'dock' && e.props.scroll?.bodyRows ? e.props.scroll.bodyRows : undefined
+    const page = (top: JSX.Element, bottom: JSX.Element) => (
+      <Box key="page" flexDirection="column" justifyContent="space-between" {...(fill ? { minHeight: fill } : {})}>
+        {top}
+        {bottom}
+      </Box>
+    )
     const list = await read($, intents)
     const p = await read($, purpose)
     const off = await read($, drift)
@@ -1981,7 +1998,6 @@ export const register: Register = on => {
     ].join(' · ')
     const footer = (
       <Box flexDirection="column" gap="xs">
-        {rule}
         <Text dimColor wrap="wrap">{meta}</Text>
         <Box flexDirection="row" flexWrap="wrap" gap={isDesk ? 'sm' : TOOLBAR_GAP}>
           <Button
@@ -2084,11 +2100,17 @@ export const register: Register = on => {
 
     if (list.length === 0 && !p.ai) {
       return (
-        <Box flexDirection="column" gap={isDesk ? 'lg' : 1}>
-          <Text dimColor>{t.empty}</Text>
-          {toolbar([startTool, closeTool])}
-          {footer}
-        </Box>
+        page(
+          <Box flexDirection="column">
+            <Text dimColor>{t.empty}</Text>
+          </Box>,
+          <Box key="bottom" flexDirection="column" gap="xs" paddingTop={isDesk ? 'md' : 1}>
+            {divider('div-bottom')}
+            {toolbar([startTool, closeTool])}
+            {divider('div-footer')}
+            {footer}
+          </Box>,
+        )
       )
     }
 
@@ -2259,22 +2281,22 @@ export const register: Register = on => {
       details === one.id && (
         <Box flexDirection="column">
           {one.source && (
-            <Text dimColor wrap="wrap">
-              {indent}
-              {'  '}
-              {t.saidLabel}
-              {t.colon}
-              {quote(one.source)}
-            </Text>
+            <Box paddingLeft={cells(indent) + 4}>
+              <Text dimColor wrap="wrap">
+                {t.saidLabel}
+                {t.colon}
+                {quote(one.source)}
+              </Text>
+            </Box>
           )}
           {one.isMet && one.evidence && (
-            <Text dimColor wrap="wrap">
-              {indent}
-              {'  '}
-              {t.evidence}
-              {t.colon}
-              {one.evidence}
-            </Text>
+            <Box paddingLeft={cells(indent) + 4}>
+              <Text dimColor wrap="wrap">
+                {t.evidence}
+                {t.colon}
+                {one.evidence}
+              </Text>
+            </Box>
           )}
         </Box>
       )
@@ -2284,6 +2306,21 @@ export const register: Register = on => {
      * worked on (with what is happening now), ○ later; a part the work may
      * have overtaken says so.
      */
+    /**
+     * A line whose head (the mark and label, "○ 1.") stands in its own column, so the words that wrap
+     * line up under the first word, never under the mark or the pane's edge.
+     */
+    const hang = (key: string, head: string, body: string, look: { color?: string; bold?: boolean; dimColor?: boolean } = {}) => (
+      <Box key={key} flexDirection="row" gap={1} flexGrow={1} flexShrink={1}>
+        <Text {...look}>{head}</Text>
+        <Box flexGrow={1} flexShrink={1}>
+          <Text {...look} wrap="wrap">
+            {body}
+          </Text>
+        </Box>
+      </Box>
+    )
+
     const goalRow = (one: Intent, indent: string): JSX.Element => {
       const parts = partsOf(list, one.id)
       const metParts = parts.filter(part => part.isMet).length
@@ -2302,41 +2339,44 @@ export const register: Register = on => {
         isYourCall(one) ? t.yourCallLabel : '',
         one.atEnd && !one.isMet ? t.checkedLast : '',
       ].filter(Boolean)
+      const head = `${mark} ${labelOf(list, one)}.`
+      const body =
+        one.ai +
+        (parts.length > 0 ? ` ${metParts}/${parts.length}` : '') +
+        (tags.length > 0 ? t.paren(tags.join(' · ')) : '') +
+        (now$ ? `  ${t.nowLabel}${t.colon}${t.stage[now$]}` : '')
+      // The lines under it (your words, the check) start where its words do.
+      const under = cells(indent) + (one.parent ? 0 : 2) + cells(head) + 1
       return (
         <Box key={`goal-${one.id}`} flexDirection="column">
-          <Box flexDirection="row" gap={1}>
+          <Box key={`row-${one.id}`} flexDirection="row" gap={1}>
             {foldButton(one)}
-            {(text => <Box flexGrow={1} flexShrink={1}>{text}</Box>)(<Text
-              bold={!one.parent && !isFinished}
-              color={isFinished ? pal.done : isWorking ? pal.now : one.isStale || one.isAuto ? pal.warn : undefined}
-              wrap="wrap"
-            >
-              {indent}
-              {mark} {labelOf(list, one)}. {one.ai}
-              {parts.length > 0 ? ` ${metParts}/${parts.length}` : ''}
-              {tags.length > 0 ? t.paren(tags.join(' · ')) : ''}
-              {now$ ? `  ${t.nowLabel}${t.colon}${t.stage[now$]}` : ''}
-            </Text>)}
+            <Box flexDirection="row" flexGrow={1} flexShrink={1} paddingLeft={cells(indent)}>
+              {hang(`line-${one.id}`, head, body, {
+                bold: !one.parent && !isFinished,
+                color: isFinished ? pal.done : isWorking ? pal.now : one.isStale || one.isAuto ? pal.warn : undefined,
+              })}
+            </Box>
             {itemTools(one)}
           </Box>
           {one.mine && edit !== one.id && (
-            <Text wrap="wrap">
-              {indent}
-              {'  '}
-              {t.you}
-              {t.colon}
-              {one.mine}
-            </Text>
+            <Box paddingLeft={under}>
+              <Text wrap="wrap">
+                {t.you}
+                {t.colon}
+                {one.mine}
+              </Text>
+            </Box>
           )}
           {edit === one.id && mineField(one.id, one.mine)}
           {!one.isMet && parts.length === 0 && (
-            <Text dimColor wrap="wrap">
-              {indent}
-              {'  '}
-              {t.check}
-              {t.colon}
-              {one.check || t.noCheck}
-            </Text>
+            <Box paddingLeft={under}>
+              <Text dimColor wrap="wrap">
+                {t.check}
+                {t.colon}
+                {one.check || t.noCheck}
+              </Text>
+            </Box>
           )}
           {cancelRow(one)}
           {detailsBlock(one, indent)}
@@ -2365,10 +2405,12 @@ export const register: Register = on => {
               <Box key={`done-${one.id}`} flexDirection="column">
                 <Box flexDirection="row" gap={1}>
                   {foldButton(one)}
-                  <Text color={pal.done} wrap="wrap">
-                    ✓ {one.id}. {one.mine || one.ai}
-                    {parts.length === 0 && doneTags(one).length > 0 ? t.paren(doneTags(one).join(' · ')) : ''}
-                  </Text>
+                  {hang(
+                    `line-done-${one.id}`,
+                    `✓ ${one.id}.`,
+                    `${one.mine || one.ai}${parts.length === 0 && doneTags(one).length > 0 ? t.paren(doneTags(one).join(' · ')) : ''}`,
+                    { color: pal.done },
+                  )}
                   <Button
                     key={`details-${one.id}`}
                     label={details === one.id ? '▾' : '⋯'}
@@ -2378,11 +2420,13 @@ export const register: Register = on => {
                   />
                 </Box>
                 {(opened.has(one.id) ? parts : []).map(part => (
-                  <Box key={`done-part-${part.id}`}>
-                    <Text color={pal.done} wrap="wrap">
-                      {'  '}✓ {labelOf(list, part)}. {part.mine || part.ai}
-                      {doneTags(part).length > 0 ? t.paren(doneTags(part).join(' · ')) : ''}
-                    </Text>
+                  <Box key={`done-part-${part.id}`} paddingLeft={4}>
+                    {hang(
+                      `line-done-${part.id}`,
+                      `✓ ${labelOf(list, part)}.`,
+                      `${part.mine || part.ai}${doneTags(part).length > 0 ? t.paren(doneTags(part).join(' · ')) : ''}`,
+                      { color: pal.done },
+                    )}
                   </Box>
                 ))}
                 {details === one.id && detailsBlock(one, '')}
@@ -2409,18 +2453,21 @@ export const register: Register = on => {
           removedWithWords.map(one => (
             <Box key={`removed-${one.id}`} flexDirection="column">
               <Box flexDirection="row" gap={1}>
-                <Text dimColor wrap="wrap">
-                  ⊘ {labelOf(list, one)}. {one.ai}
-                  {t.paren(one.closed?.as === 'replaced' ? t.replacedBy(one.closed.replacedBy ?? '?') : t.cancelledLabel)}
-                </Text>
+                {hang(
+                  `line-removed-${one.id}`,
+                  `⊘ ${labelOf(list, one)}.`,
+                  `${one.ai}${t.paren(one.closed?.as === 'replaced' ? t.replacedBy(one.closed.replacedBy ?? '?') : t.cancelledLabel)}`,
+                  { dimColor: true },
+                )}
                 <Button key={`restore-${one.id}`} label={t.restore} plain dimColor onPress={personDo((l, at) => restore(l, one.id, at, 'person'))} />
               </Box>
-              <Text wrap="wrap">
-                {'  '}
-                {t.you}
-                {t.colon}
-                {one.mine}
-              </Text>
+              <Box paddingLeft={cells(`⊘ ${labelOf(list, one)}.`) + 1}>
+                <Text wrap="wrap">
+                  {t.you}
+                  {t.colon}
+                  {one.mine}
+                </Text>
+              </Box>
             </Box>
           ))}
       </Box>
@@ -2450,29 +2497,37 @@ export const register: Register = on => {
       )
 
     return (
-      <Box flexDirection="column" gap={isDesk ? 'lg' : 1}>
-        <Box flexDirection="column" gap={isDesk ? 'sm' : 0}>
-          {purposeBlock}
-          {counted.total > 0 && progressBar}
-          {stageLine}
-          {backgroundBlock}
-        </Box>
-        {driftBox}
-        {openRequests.length > 0 && (
-          // Each open request its own card, its parts inside it.
-          <Box flexDirection="column" gap="sm">
-            {openRequests.map(one => (
-              <Box key={`card-${one.id}`} flexDirection="column" borderStyle="round" borderDimColor paddingX="sm">
-                {goalRow(one, '')}
-              </Box>
-            ))}
+      page(
+        <Box key="top" flexDirection="column" gap={isDesk ? 'md' : 1}>
+          <Box flexDirection="column" gap={isDesk ? 'sm' : 0}>
+            {purposeBlock}
+            {counted.total > 0 && progressBar}
+            {stageLine}
+            {backgroundBlock}
           </Box>
-        )}
-        {doneGroup}
-        {removedGroup}
-        {clearRow}
-        {footer}
-      </Box>
+          {driftBox}
+          {openRequests.length > 0 && divider('div-goals')}
+          {openRequests.length > 0 && (
+            // Each open request its own card, its parts inside it.
+            <Box flexDirection="column" gap="sm">
+              {openRequests.map(one => (
+                <Box key={`card-${one.id}`} flexDirection="column" borderStyle="round" borderDimColor paddingX="sm">
+                  {goalRow(one, '')}
+                </Box>
+              ))}
+            </Box>
+          )}
+          {(doneGroup || removedGroup) && divider('div-done')}
+          {doneGroup}
+          {removedGroup}
+        </Box>,
+        <Box key="bottom" flexDirection="column" gap="xs" paddingTop={isDesk ? 'md' : 1}>
+          {divider('div-bottom')}
+          {clearRow}
+          {divider('div-footer')}
+          {footer}
+        </Box>,
+      )
     )
   })
 }
