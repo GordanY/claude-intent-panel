@@ -35,6 +35,8 @@ const now = atom({ plugin: 'intent-tracker', key: 'now' } as const, 0)
 /** The person's language choice: saved in $.store, shared by every worktree and session. */
 const lang = atom({ plugin: 'intent-tracker', key: 'lang' } as const, DEFAULT_LANG as Lang)
 const LANG_KEY = 'settings:lang'
+/** The drift check's model: saved in $.store, shared by every worktree and session. */
+const driftModel = atom({ plugin: 'intent-tracker', key: 'driftModel' } as const, 'haiku' as string)
 /**
  * Whether this session has a person who can see the pane: false for a `-p`
  * run, the SDK and other headless sessions, where the mod stays out of the way
@@ -51,8 +53,18 @@ function fromSubagent(e: unknown): boolean {
 }
 const SUBAGENT_DENY = 'Only the main conversation updates the intent pane; leave it to the main agent.'
 
-/** The model the drift check runs on (the session's own model does the rest). */
-const DRIFT_MODEL = 'haiku'
+/**
+ * The models the drift check may run on, cheapest first; the person picks one
+ * in the footer. The session's own model does the rest (goals and ticks are its
+ * tool calls), so that one follows the session and is not picked here.
+ */
+const DRIFT_MODELS = ['haiku', 'sonnet', 'opus'] as const
+const DEFAULT_DRIFT_MODEL = 'haiku'
+const DRIFT_MODEL_KEY = 'settings:driftModel'
+
+function asDriftModel(value: unknown): string {
+  return typeof value === 'string' && (DRIFT_MODELS as readonly string[]).includes(value) ? value : DEFAULT_DRIFT_MODEL
+}
 
 /** How often a session re-reads the shared list for changes made elsewhere. */
 const SYNC_MS = 2_000
@@ -339,7 +351,7 @@ async function checkDrift($: EngineInterface): Promise<void> {
   if (work.length === 0) return
 
   const answer = await $.model.complete({
-    model: DRIFT_MODEL,
+    model: await read($, driftModel),
     maxTokens: 200,
     system:
       "You check whether an AI coding assistant's latest turn stayed on the goals a person set for this work. Reply with JSON only.",
@@ -370,6 +382,8 @@ async function activate($: EngineInterface): Promise<void> {
   await update($, isActive, () => true)
   for (const spec of toolSpecs) await $.tool.register(spec)
   const chosen = asLang(await $.store.get(LANG_KEY))
+  const stored = asDriftModel(await $.store.get(DRIFT_MODEL_KEY))
+  await update($, driftModel, () => stored)
   await update($, lang, () => chosen)
   await $.command.register({ name: 'intents', description: strings(chosen).command })
   await sweep($).catch(() => undefined)
@@ -391,6 +405,8 @@ async function activate($: EngineInterface): Promise<void> {
         await update($, lang, () => shared)
         await refreshTitle($)
       }
+      const sharedModel = asDriftModel(await $.store.get(DRIFT_MODEL_KEY))
+      if (sharedModel !== (await read($, driftModel))) await update($, driftModel, () => sharedModel)
     })().catch(() => undefined)
   })
 }
@@ -561,6 +577,7 @@ export const register: Register = on => {
     const nowMs = await read($, now)
     const chosen = await read($, lang)
     const isDoneShown = await read($, isDoneOpen)
+    const checker = await read($, driftModel)
     const t = strings(chosen)
     const mainModel = modelName(await $.session.model().catch(() => t.mainSession))
     const columns = e.props.bodyColumns ?? 40
@@ -572,6 +589,12 @@ export const register: Register = on => {
       await update($, editing, () => null)
       await $.store.set(LANG_KEY, next)
       await refreshTitle($)
+    }
+
+    const chooseModel = async (next: string) => {
+      await update($, driftModel, () => next)
+      await update($, editing, () => null)
+      await $.store.set(DRIFT_MODEL_KEY, next)
     }
 
     const saveMine = (target: string) => (value: string) => {
@@ -659,16 +682,26 @@ export const register: Register = on => {
 
     // Metadata on one light line below a divider; 🌐 opens the language choices.
     const isPicking = edit === 'lang' || edit === 'lang-custom'
+    // The drift model's name opens the model choices, as 🌐 opens the languages.
+    const isPickingModel = edit === 'model'
     const meta = [
       ...(lastAt === null ? [] : [ago(t, lastAt, Math.max(nowMs, lastAt))]),
-      mainModel,
-      `${t.driftShort} ${modelName(DRIFT_MODEL)}`,
+      `${t.mainShort} ${mainModel}`,
+      `${t.driftShort} `,
     ].join(' · ')
     const footer = (
       <Box flexDirection="column">
         {rule}
         <Box flexDirection="row" flexWrap="wrap">
-          <Text dimColor wrap="wrap">{`${meta} · `}</Text>
+          <Text dimColor wrap="wrap">{meta}</Text>
+          <Button
+            key="drift-model"
+            label={modelName(checker)}
+            plain
+            dimColor
+            onPress={() => update($, editing, () => (isPickingModel ? null : 'model'))}
+          />
+          <Text dimColor>{' · '}</Text>
           <Button
             key="lang"
             label={`🌐 ${langLabel(chosen)}`}
@@ -677,6 +710,19 @@ export const register: Register = on => {
             onPress={() => update($, editing, () => (isPicking ? null : 'lang'))}
           />
         </Box>
+        {isPickingModel && (
+          <Box flexDirection="row" gap={TOOLBAR_GAP} flexWrap="wrap">
+            {DRIFT_MODELS.map(id => (
+              <Button
+                key={`model-${id}`}
+                label={modelName(id)}
+                plain
+                dimColor={checker !== id}
+                onPress={() => chooseModel(id)}
+              />
+            ))}
+          </Box>
+        )}
         {isPicking && (
           <Box flexDirection="row" gap={TOOLBAR_GAP} flexWrap="wrap">
             {(

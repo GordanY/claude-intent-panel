@@ -38,6 +38,8 @@ declare module 'claude-code' {
       now: number
       /** The pane's language, loaded from $.store at session start. */
       lang: Lang
+      /** The model the drift check runs on (an alias), loaded from $.store at session start. */
+      driftModel: string
       /** A person can see this session (not `-p`, not the SDK): the mod acts only then. */
       isActive: boolean
       /** The finished goals are expanded in the pane. */

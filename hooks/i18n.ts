@@ -53,6 +53,8 @@ export type Strings = {
   empty: string
   doneGroup: (n: number) => string
   driftShort: string
+  /** Footer label for the session's own model, which writes the goals and ticks them. */
+  mainShort: string
   start: string
   refresh: string
   clear: string
@@ -101,6 +103,7 @@ const EN: Strings = {
   empty: 'No goals yet.',
   doneGroup: n => `${n} done`,
   driftShort: 'drift',
+  mainShort: 'goals',
   start: 'Start',
   refresh: 'Refresh AI content',
   clear: 'Clear list',
@@ -154,6 +157,7 @@ const ZH: Strings = {
   empty: '還沒有目標。',
   doneGroup: n => `已完成 ${n} 項`,
   driftShort: '偏題',
+  mainShort: '整理',
   start: '開始整理',
   refresh: '重新整理 AI 內容',
   clear: '清空清單',
@@ -209,6 +213,7 @@ const JA: Strings = {
   empty: 'まだ目標がありません。',
   doneGroup: n => `${n} 件完了`,
   driftShort: '脱線',
+  mainShort: '整理',
   start: '整理開始',
   refresh: 'AI 内容を更新',
   clear: 'リストを消去',

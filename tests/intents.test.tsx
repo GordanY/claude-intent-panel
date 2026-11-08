@@ -336,19 +336,20 @@ test('the footer shows when the list last changed and which models do the work',
   await seed($)
 
   let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /Haiku/ }))?.text).toBe('剛剛 · Opus 5.5 · 偏題 Haiku · ')
+  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('剛剛 · 整理 Opus 5.5 · 偏題 ')
+  expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('Haiku')
   expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 中文')
   expect((await pane.find({ type: 'Text', text: /^─+$/ }))).toBeDefined()
   await pane.unmount()
 
   await ui.clock.advance(10 * 60_000)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /Haiku/ }))?.text).toBe('10 分鐘前 · Opus 5.5 · 偏題 Haiku · ')
+  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('10 分鐘前 · 整理 Opus 5.5 · 偏題 ')
   await pane.unmount()
 
   await $.tool.call({ tool: MET, id: '1', evidence: '通過' } as never)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /Haiku/ }))?.text).toBe('剛剛 · Opus 5.5 · 偏題 Haiku · ')
+  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('剛剛 · 整理 Opus 5.5 · 偏題 ')
   await pane.unmount()
 })
 
@@ -377,7 +378,7 @@ test('the language defaults to English and the choice is saved and applied', asy
   await seed($)
 
   let pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 60 }, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /Haiku/ }))?.text).toBe('just now · Opus 5.5 · drift Haiku · ')
+  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('just now · goals Opus 5.5 · drift ')
   expect((await pane.find({ type: 'Button', key: 'refresh-ai' }))?.text).toBe('↻ Refresh AI content')
   expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 English')
 
@@ -387,7 +388,7 @@ test('the language defaults to English and the choice is saved and applied', asy
   expect(store.get('settings:lang')).toEqual({ code: 'ja' })
 
   pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 60 }, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /Haiku/ }))?.text).toBe('たった今 · Opus 5.5 · 脱線 Haiku · ')
+  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('たった今 · 整理 Opus 5.5 · 脱線 ')
   expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 日本語')
   await pane.press({ key: 'lang' })
   await pane.press({ key: 'lang-custom' })
@@ -608,4 +609,48 @@ test('the footer rule is box characters on the terminal and a 1px line on the de
   expect(await desk.find({ type: 'Text', text: /─/ })).toBeUndefined()
   expect(await desk.find({ type: 'Svg' })).toBeDefined()
   await desk.unmount()
+})
+
+test('the drift check model is picked in the footer, saved for every session, and used for the next check', async ($, on) => {
+  const store = engine(on)
+  const asked: string[] = []
+  on('session.messages', () => ({
+    value: [
+      { role: 'user', text: '幫我修草稿', toolUses: [] },
+      { role: 'assistant', text: '改了 CI', toolUses: [{ tool_use_id: 't1', tool: 'Edit', input: { file_path: 'ci.yml' } }] },
+    ],
+  }))
+  on('model.complete', (_, e) => {
+    asked.push(e.model)
+    return { value: { isAnswered: true, text: '{"onTrack": true}', usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } } }
+  })
+  on('turn.complete', () => ({ text: 'done' }))
+  await seed($)
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await pane.press({ key: 'drift-model' })
+  expect((await pane.find({ type: 'Button', key: 'model-sonnet' }))?.text).toBe('Sonnet')
+  await pane.press({ key: 'model-sonnet' })
+  expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('Sonnet')
+  expect(await pane.find({ type: 'Button', key: 'model-opus' })).toBeUndefined()
+  await pane.unmount()
+  expect(store.get('settings:driftModel')).toBe('sonnet')
+
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+  expect(asked).toEqual(['sonnet'])
+})
+
+test('a drift model another session picks is used here; an unknown saved value falls back to Haiku', async ($, on) => {
+  const store = engine(on, { 'settings:driftModel': 'gpt-9' })
+  await seed($)
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('Haiku')
+  await pane.unmount()
+
+  store.set('settings:driftModel', 'opus')
+  await ui.clock.advance(2_000)
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('Opus')
+  await pane.unmount()
 })
