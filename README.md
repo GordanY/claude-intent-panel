@@ -39,6 +39,7 @@ drift Haiku  observer: on  🌐 English  ◐ dark
 | ● | being worked on now (several at once is fine) |
 | ◐ | a request with some of its parts done (`1/3`) |
 | ✓ | done (green); finished parts fold under their request |
+| ⚠ | ticked, but the observer found nothing backing it (*evidence not matched*): not counted until it is ticked again or reopened |
 
 **Tags**
 
@@ -55,7 +56,7 @@ drift Haiku  observer: on  🌐 English  ◐ dark
 
 **Now** (beside a ● part, or under the progress bar): *plan*, *investigate*, *editing*, *building*, *test*, *fix* (editing after a failed test), *review*, *thinking* (between tools), *waiting for your answer*, *waiting for your approval*. Nothing shows once the turn is over. **Also running** lists background commands and subagents until they really end.
 
-**Buttons**: ✎ write an item in your own words (yours lead) · ✕ cancel it · ⋯ the words that asked for it and its evidence · ▶ start (build the list from the conversation) · ↻ refresh the AI side · ⌫ clear the list (two presses) · ✕ close (`/intents` reopens). Each open request is a card of its own, in the terminal and in the desktop app alike; dividers part the sections, wrapped words line up under the first word, and docked beside the transcript the tools and settings sit at the bottom edge (a long list pushes them down to the end of the scroll). Footer: when it last changed and the model that writes the list, then the settings on their own line: the drift model (Haiku, Sonnet or Opus), *observer: on/off*, 🌐 language (English, 中文, 日本語 or your own), ◐ colors (auto keeps your terminal's own look; dark or light paint the pane's background and give its text, buttons and progress bar colors that read on it).
+**Buttons**: ✎ write an item in your own words (yours lead) · ✕ cancel it · ⋯ the words that asked for it and its evidence · ▶ start (build the list from the conversation) · ↻ refresh the AI side · ⌫ clear the list (two presses) · ✕ close (`/intents` reopens). Under ✓ done, the latest five finished requests show, one line each (the rest behind *show all*). A part's check shows while it is being worked on; ⋯ shows any other's. Each open request is a card of its own, in the terminal and in the desktop app alike; dividers part the sections, wrapped words line up under the first word, and docked beside the transcript the tools and settings sit at the bottom edge (a long list pushes them down to the end of the scroll). Footer: when it last changed and the model that writes the list, then the settings on their own line: the drift model (Haiku, Sonnet or Opus), *observer: on/off*, 🌐 language (English, 中文, 日本語 or your own), ◐ colors (auto keeps your terminal's own look; dark or light paint the pane's background and give its text, buttons and progress bar colors that read on it).
 
 ## How it works
 

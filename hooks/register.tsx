@@ -14,6 +14,7 @@ import {
   isFalsifiable,
   itemLines,
   joinWords,
+  isSettled,
   isUnclear,
   isYourCall,
   ownWriting,
@@ -331,6 +332,10 @@ const expanded = atom({ plugin: 'intent-tracker', key: 'expanded' } as const, []
 const isRemovedOpen = atom({ plugin: 'intent-tracker', key: 'isRemovedOpen' } as const, false)
 /** Whether the finished goals are expanded in the pane (folded by default). */
 const isDoneOpen = atom({ plugin: 'intent-tracker', key: 'isDoneOpen' } as const, false)
+/** Whether every finished request shows, not only the latest few. */
+const isDoneAll = atom({ plugin: 'intent-tracker', key: 'isDoneAll' } as const, false)
+/** How many finished requests show before "show all". */
+const DONE_SHOWN = 5
 
 /** A subagent's (or teammate's) call: only the main conversation edits the list. */
 function fromSubagent(e: unknown): boolean {
@@ -2293,6 +2298,15 @@ export const register: Register = on => {
               </Text>
             </Box>
           )}
+          {partsOf(list, one.id).length === 0 && !one.isMet && (
+            <Box paddingLeft={cells(indent) + 4}>
+              <Text dimColor wrap="wrap">
+                {t.check}
+                {t.colon}
+                {one.check || t.noCheck}
+              </Text>
+            </Box>
+          )}
           {one.isMet && one.evidence && (
             <Box paddingLeft={cells(indent) + 4}>
               <Text dimColor wrap="wrap">
@@ -2314,11 +2328,17 @@ export const register: Register = on => {
      * A line whose head (the mark and label, "○ 1.") stands in its own column, so the words that wrap
      * line up under the first word, never under the mark or the pane's edge.
      */
-    const hang = (key: string, head: string, body: string, look: { color?: string; bold?: boolean; dimColor?: boolean } = {}) => (
+    const hang = (
+      key: string,
+      head: string,
+      body: string,
+      look: { color?: string; bold?: boolean; dimColor?: boolean } = {},
+      isOneLine = false,
+    ) => (
       <Box key={key} flexDirection="row" gap={1} flexGrow={1} flexShrink={1}>
         <Text {...look}>{head}</Text>
         <Box flexGrow={1} flexShrink={1}>
-          <Text {...look} wrap="wrap">
+          <Text {...look} wrap={isOneLine ? 'truncate-end' : 'wrap'}>
             {body}
           </Text>
         </Box>
@@ -2327,11 +2347,13 @@ export const register: Register = on => {
 
     const goalRow = (one: Intent, indent: string): JSX.Element => {
       const parts = partsOf(list, one.id)
-      const metParts = parts.filter(part => part.isMet).length
+      const metParts = parts.filter(isSettled).length
       // A request with parts is done when they all are, whatever it was ticked before (a follow-up reopens it).
-      const isFinished = parts.length > 0 ? parts.every(part => part.isMet) : one.isMet
+      const isFinished = parts.length > 0 ? parts.every(isSettled) : isSettled(one)
       const isWorking = !!one.parent && !one.isMet && one.isActive === true
-      const mark = isFinished ? '✓' : isWorking ? '●' : metParts > 0 ? '◐' : '○'
+      // Ticked, but nothing the turn showed backs it: not counted until it is ticked again or reopened.
+      const isDoubted = one.isMet && !!one.unmatched
+      const mark = isDoubted ? '⚠' : isFinished ? '✓' : isWorking ? '●' : metParts > 0 ? '◐' : '○'
       const now$ = isWorking ? live$[one.id] : undefined
       const tags = [
         one.isMet && one.isAuto ? t.seenInOutput : '',
@@ -2358,7 +2380,7 @@ export const register: Register = on => {
             <Box flexDirection="row" flexGrow={1} flexShrink={1} paddingLeft={cells(indent)}>
               {hang(`line-${one.id}`, head, body, {
                 bold: !one.parent && !isFinished,
-                color: isFinished ? pal.done : isWorking ? pal.now : one.isStale || one.isAuto ? pal.warn : undefined,
+                color: isFinished ? pal.done : isWorking ? pal.now : isDoubted || one.isStale || one.isAuto ? pal.warn : undefined,
               })}
             </Box>
             {itemTools(one)}
@@ -2373,7 +2395,7 @@ export const register: Register = on => {
             </Box>
           )}
           {edit === one.id && mineField(one.id, one.mine)}
-          {!one.isMet && parts.length === 0 && (
+          {isWorking && (
             <Box paddingLeft={under}>
               <Text dimColor wrap="wrap">
                 {t.check}
@@ -2384,13 +2406,19 @@ export const register: Register = on => {
           )}
           {cancelRow(one)}
           {detailsBlock(one, indent)}
-          {parts.filter(part => !part.isMet || opened.has(one.id)).map(part => goalRow(part, `${indent}  `))}
+          {parts.filter(part => !isSettled(part) || opened.has(one.id)).map(part => goalRow(part, `${indent}  `))}
         </Box>
       )
     }
 
 
     // What is done, folded to one line; open it for each request, its parts and the evidence.
+    // The latest finished first; past five, the rest wait behind "show all".
+    const finishedAt = (one: Intent) =>
+      Math.max(0, ...[one, ...partsOf(list, one.id)].flatMap(x => (x.history ?? []).filter(h => h.what === 'met' || h.what === 'confirmed').map(h => h.at)))
+    const latestDone = [...doneRequests].sort((a, b) => finishedAt(b) - finishedAt(a) || Number(b.id) - Number(a.id))
+    const showAllDone = await read($, isDoneAll)
+    const shownDone = showAllDone ? latestDone : latestDone.slice(0, DONE_SHOWN)
     const doneGroup = doneRequests.length > 0 && (
       <Box flexDirection="column">
         <Button
@@ -2401,7 +2429,7 @@ export const register: Register = on => {
           onPress={() => update($, isDoneOpen, v => !v)}
         />
         {isDoneShown &&
-          doneRequests.map(one => {
+          shownDone.map(one => {
             const parts = partsOf(list, one.id)
             const doneTags = (x: Intent) =>
               [x.isAuto ? t.seenInOutput : '', x.byPerson ? t.confirmedByYou : '', x.unmatched && !x.isAuto ? t.unmatchedLabel : ''].filter(Boolean)
@@ -2414,6 +2442,7 @@ export const register: Register = on => {
                     `✓ ${one.id}.`,
                     `${one.mine || one.ai}${parts.length === 0 && doneTags(one).length > 0 ? t.paren(doneTags(one).join(' · ')) : ''}`,
                     { color: pal.done },
+                    details !== one.id,
                   )}
                   <Button
                     key={`details-${one.id}`}
@@ -2430,6 +2459,7 @@ export const register: Register = on => {
                       `✓ ${labelOf(list, part)}.`,
                       `${part.mine || part.ai}${doneTags(part).length > 0 ? t.paren(doneTags(part).join(' · ')) : ''}`,
                       { color: pal.done },
+                      details !== one.id,
                     )}
                   </Box>
                 ))}
@@ -2437,6 +2467,15 @@ export const register: Register = on => {
               </Box>
             )
           })}
+        {isDoneShown && doneRequests.length > DONE_SHOWN && (
+          <Button
+            key="done-all"
+            label={showAllDone ? t.showLatest(DONE_SHOWN) : t.showAll(doneRequests.length)}
+            plain
+            dimColor
+            onPress={() => update($, isDoneAll, v => !v)}
+          />
+        )}
       </Box>
     )
 

@@ -148,7 +148,11 @@ test('goals show in the pane, tick once their check passes, and are saved for th
   let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 0/2')).toBe(true)
   expect((await lineOf(ui, /草稿要保留/))).toBe('○ 1. 關掉 app 後草稿要保留')
+  // The check of an item not being worked on waits behind ⋯.
+  expect(await ui.find({ type: 'Text', text: /檢查：DraftPersist/ })).toBeUndefined()
+  await ui.press({ key: 'details-1' })
   expect((await ui.find({ type: 'Text', text: /檢查：DraftPersist/ }))?.text).toBe('檢查：DraftPersistTests 通過')
+  await ui.press({ key: 'details-1' })
   // No field for the person's words until they press ✎.
   expect(await ui.find({ type: 'Input' })).toBeUndefined()
   await ui.unmount()
@@ -630,6 +634,7 @@ test('a language another session picks is applied here', async ($, on) => {
   await ui.clock.advance(2_000)
 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'details-1' })
   expect((await pane.find({ type: 'Text', text: /Check/ }))?.text).toBe('Check: DraftPersistTests 通過')
   await pane.unmount()
 })
@@ -866,7 +871,7 @@ async function texts(pane: Findable) {
   for (let i = 0; i < all.length; i += 1) {
     const head = all[i] ?? ''
     const body = all[i + 1] ?? ''
-    if (heads.has(head + body) && /^[○●◐✓⊘] /.test(head)) {
+    if (heads.has(head + body) && /^[○●◐✓⊘⚠] /.test(head)) {
       out.push(`${head} ${body}`)
       i += 1
     } else out.push(head)
@@ -953,6 +958,7 @@ test('a list saved with old "limits" loads them as ordinary goals, open, with th
   })
   await start($)
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'details-1' })
   const shown = await texts(pane)
   expect(shown).toContain('○ 1. 同步不受影響')
   expect(shown).toContain('檢查：diff 不含 Sync/')
@@ -2286,8 +2292,8 @@ test("the observer flags a tick of Claude's whose evidence pairs with nothing", 
   // Only a tick audited this turn can be flagged.
   expect(saved.intents.find(x => x.id === '2')?.unmatched).toBeUndefined()
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await pane.press({ key: 'done-toggle' })
-  expect(await texts(pane)).toContain('✓ 1. 關掉 app 後草稿要保留（未對上證據）')
+  // Not counted while in doubt: back among the open items, marked ⚠.
+  expect(await texts(pane)).toContain('⚠ 1. 關掉 app 後草稿要保留（未對上證據）')
   await pane.unmount()
   const listed = await $.tool.call({ tool: 'mcp__intent-tracker__intent_list' } as never)
   expect('result' in listed && String(listed.result).includes('EVIDENCE NOT MATCHED')).toBe(true)
@@ -2531,6 +2537,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await seed($)
     await $.tool.call({ tool: ADD, intents: [{ summary: '一個很長很長的分項，長到在窄的面板裡一定會換到第二行去', check: 'LongPartTests 通過', parent: '1' }] } as never)
     await $.tool.call({ tool: MET, id: '2', evidence: 'git diff 不含 Sync/' } as never)
+    // Being worked on, so its check line shows.
+    await $.tool.call({ tool: REVISE, id: '1a', active: true } as never)
     const pane = await $.ui.mount({ ...PANE, surface })
     await pane.press({ key: 'done-toggle' })
     const boxes = await pane.findAll({ type: 'Box' })
@@ -2542,15 +2550,16 @@ for (const surface of ['terminal', 'desktop'] as const) {
       const kids = line.children as { type?: string; props?: Record<string, unknown> }[]
       expect(kids.length).toBe(2)
       expect(kids[1]?.props?.flexShrink).toBe(1)
-      expect(JSON.stringify(kids[1])).toContain('"wrap":"wrap"')
+      // A finished item keeps to one line, cut with "…"; an open one wraps.
+      expect(JSON.stringify(kids[1])).toContain(line.key?.startsWith('line-done-') ? '"wrap":"truncate-end"' : '"wrap":"wrap"')
       expect(JSON.stringify(kids[0])).not.toContain('"wrap":"wrap"')
     }
     // The lines under an item start where its words do: the mark and its gap, the head, one space.
     const under = (text: RegExp) => boxes.find(box => box.props.paddingLeft !== undefined && text.test(box.text ?? ''))?.props.paddingLeft
     expect(under(/^檢查：diff 不含 Sync\//)).toBeUndefined() // (done: no check line)
-    expect(under(/^檢查：LongPartTests/)).toBe(2 + '○ 1a.'.length + 1)
+    expect(under(/^檢查：LongPartTests/)).toBe(2 + '● 1a.'.length + 1)
     // The part's own line is indented two under its request's, the mark lining up with the request's mark.
-    expect(boxes.find(box => box.props.paddingLeft !== undefined && box.text?.startsWith('○ 1a.'))?.props.paddingLeft).toBe(2)
+    expect(boxes.find(box => box.props.paddingLeft !== undefined && box.text?.startsWith('● 1a.'))?.props.paddingLeft).toBe(2)
     await pane.unmount()
   })
 }
@@ -2606,4 +2615,67 @@ test("the observer's audit reads a long turn's latest outputs, where its ticks r
   const audit = prompts.find(p => p.includes("The assistant's own ticks this turn")) ?? ''
   expect(audit).toContain('(pass) DraftPersistTests')
   expect(audit).not.toContain('(fail) DraftPersistTests run 0')
+})
+
+test('a tick the observer could not match shows ⚠ and does not count', async ($, on) => {
+  const store = engine(on)
+  on('ui.toast', () => ({ value: undefined }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: JSON.stringify({ onTrack: true, unmatched: [{ id: '1', why: '沒看到輸出' }] }), usage: USAGE } }))
+  await seed($)
+  await $.tool.call({ tool: MET, id: '1', evidence: 'DraftPersistTests 3/3 通過' } as never)
+  setMessages(() => ({ value: [{ role: 'user', text: '跑測試', toolUses: [] }, { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'm', tool: MET, input: { id: '1', evidence: 'DraftPersistTests 3/3 通過' }, text: 'ok' }] }] }))
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // Still ticked on record, but shown ⚠ among the open items and left out of the count.
+  expect(await texts(pane)).toContain('⚠ 1. 關掉 app 後草稿要保留（未對上證據）')
+  expect((await pane.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 0/2')).toBe(true)
+  expect(await pane.find({ type: 'Button', key: 'done-toggle' })).toBeUndefined()
+  await pane.unmount()
+  expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.find(x => x.id === '1')?.isMet).toBe(true)
+  // Ticked again on a rerun: counted.
+  await $.tool.call({ tool: MET, id: '1', evidence: 'DraftPersistTests 3/3 通過（重跑）' } as never)
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
+  await pane.unmount()
+})
+
+test('the done group shows the latest five, the rest behind show all', async ($, on) => {
+  engine(on)
+  await start($)
+  const words = ['一號需求要做', '二號需求要做', '三號需求要做', '四號需求要做', '五號需求要做', '六號需求要做', '七號需求要做']
+  await $.tool.call({ tool: ADD, intents: words.map((w, n) => ({ summary: w, check: `Check${n + 1}Tests 通過`, source: w })) } as never)
+  ui.messages = [ASK, { role: 'user', text: words.join('，'), toolUses: [] }]
+  await $.tool.call({ tool: ADD, intents: words.map((w, n) => ({ summary: w, check: `Check${n + 1}Tests 通過`, source: w })) } as never)
+  // Ticked in the order 3, 1, 2, 4, 5, 6, 7 (7 last).
+  for (const id of ['3', '1', '2', '4', '5', '6', '7']) {
+    await $.tool.call({ tool: MET, id, evidence: `Check${id}Tests 通過` } as never)
+    await ui.clock.advance(1_000)
+  }
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'done-toggle' })
+  const done = async () => (await texts(pane)).filter(x => x.startsWith('✓ ')).map(x => x.split('.')[0])
+  expect(await done()).toEqual(['✓ 7', '✓ 6', '✓ 5', '✓ 4', '✓ 2'])
+  expect((await pane.find({ type: 'Button', key: 'done-all' }))?.text).toBe('顯示全部 7 項')
+  await pane.press({ key: 'done-all' })
+  expect(await done()).toEqual(['✓ 7', '✓ 6', '✓ 5', '✓ 4', '✓ 2', '✓ 1', '✓ 3'])
+  expect((await pane.find({ type: 'Button', key: 'done-all' }))?.text).toBe('只顯示最近 5 項')
+  await pane.unmount()
+})
+
+test('a check line shows only for a part being worked on; ⋯ shows the others', async ($, on) => {
+  engine(on)
+  await seed($)
+  await $.tool.call({ tool: ADD, intents: [{ summary: '當機後草稿還在', check: 'CrashDraftTests 通過', parent: '1' }, { summary: '切換後草稿還在', check: 'SwitchDraftTests 通過', parent: '1' }] } as never)
+  await $.tool.call({ tool: REVISE, id: '1a', active: true } as never)
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  let shown = await texts(pane)
+  expect(shown).toContain('檢查：CrashDraftTests 通過')
+  expect(shown.some(x => x.includes('SwitchDraftTests'))).toBe(false)
+  expect(shown.some(x => x.includes('diff 不含 Sync/'))).toBe(false)
+  await pane.press({ key: 'details-p2' })
+  shown = await texts(pane)
+  expect(shown).toContain('檢查：SwitchDraftTests 通過')
+  await pane.unmount()
 })

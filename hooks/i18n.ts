@@ -52,6 +52,8 @@ export type Strings = {
   opened: string
   empty: string
   doneGroup: (n: number) => string
+  showAll: (n: number) => string
+  showLatest: (n: number) => string
   driftShort: string
   /** Footer label for the session's own model, which writes the goals and ticks them. */
   mainShort: string
@@ -144,6 +146,8 @@ const EN: Strings = {
   opened: 'Goals pane opened.',
   empty: 'No goals yet.',
   doneGroup: n => `${n} done`,
+  showAll: n => `show all ${n}`,
+  showLatest: n => `show the latest ${n}`,
   driftShort: 'drift',
   mainShort: 'goals',
   start: 'Start',
@@ -252,6 +256,8 @@ const ZH: Strings = {
   opened: '已打開本次目標面板。',
   empty: '還沒有目標。',
   doneGroup: n => `已完成 ${n} 項`,
+  showAll: n => `顯示全部 ${n} 項`,
+  showLatest: n => `只顯示最近 ${n} 項`,
   driftShort: '偏題',
   mainShort: '整理',
   start: '開始整理',
@@ -362,6 +368,8 @@ const JA: Strings = {
   opened: '目標パネルを開きました。',
   empty: 'まだ目標がありません。',
   doneGroup: n => `${n} 件完了`,
+  showAll: n => `すべて表示（${n} 件）`,
+  showLatest: n => `最新 ${n} 件のみ表示`,
   driftShort: '脱線',
   mainShort: '整理',
   start: '整理開始',

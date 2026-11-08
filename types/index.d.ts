@@ -173,6 +173,7 @@ declare module 'claude-code' {
       isRemovedOpen: boolean
       /** The finished goals are expanded in the pane. */
       isDoneOpen: boolean
+      isDoneAll: boolean
     }
   }
 }

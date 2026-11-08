@@ -43,15 +43,20 @@ export function units(list: readonly Intent[]): Intent[] {
   return list.filter(one => isLive(one) && partsOf(list, one.id).length === 0)
 }
 
+/** Ticked and standing: a tick the observer found nothing to back ("evidence not matched") does not count yet. */
+export function isSettled(one: Intent): boolean {
+  return one.isMet && !one.unmatched
+}
+
 export function progress(list: readonly Intent[]): { met: number; total: number } {
   const counted = units(list)
-  return { met: counted.filter(one => one.isMet).length, total: counted.length }
+  return { met: counted.filter(isSettled).length, total: counted.length }
 }
 
 /** A goal is done when it is ticked, or, broken down, when every live part is. */
 export function isDone(list: readonly Intent[], one: Intent): boolean {
   const parts = partsOf(list, one.id)
-  return parts.length > 0 ? parts.every(part => part.isMet) : one.isMet
+  return parts.length > 0 ? parts.every(isSettled) : isSettled(one)
 }
 
 /** The letter for the nth part of a request: a, b, … z, then -27, -28… */
@@ -477,9 +482,9 @@ export function briefText(p: Purpose, list: readonly Intent[]): string {
       continue
     }
     const parts = partsOf(list, request.id)
-    const done = parts.filter(part => part.isMet).length
+    const done = parts.filter(isSettled).length
     lines.push(`${request.id}. [${parts.length > 0 ? `${done}/${parts.length}` : state(request)}] ${clip(request.ai, 70)}`)
-    for (const part of parts.filter(one => !one.isMet)) lines.push(`  ${labelOf(list, part)}. [${state(part)}] ${clip(part.ai, 70)}`)
+    for (const part of parts.filter(one => !isSettled(one))) lines.push(`  ${labelOf(list, part)}. [${state(part)}] ${clip(part.ai, 70)}`)
   }
   if (finished.length > 0) lines.push(`Done: ${finished.join(', ')}`)
   return lines.join('\n')
