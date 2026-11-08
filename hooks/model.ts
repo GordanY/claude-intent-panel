@@ -138,6 +138,17 @@ export function dialogAnswers(result: string): string[] {
   return answers
 }
 
+/**
+ * Messages the person typed while a turn ran: the engine delivers each inside
+ * a later user message (beside tool results), wrapped in a fixed sentence.
+ */
+export function midTurnTexts(text: string): string[] {
+  const found: string[] = []
+  const pattern = /The user sent a new message while you were working:\n([\s\S]*?)(?=\n\n(?:This is how Claude Code surfaces|IMPORTANT:)|$)/g
+  for (const m of text.matchAll(pattern)) if (m[1]?.trim()) found.push(m[1].trim())
+  return found
+}
+
 type Message = {
   role: string
   text: string
@@ -152,6 +163,8 @@ export function personTexts(messages: readonly Message[], pane: readonly string[
     if (m.role === 'user' && m.text.trim() !== '' && !(m.toolResults && m.toolResults.length > 0) && !NOT_THE_PERSON.test(m.text)) {
       said.push(m.text)
     }
+    // Typed over a running turn: found in the transcript too, so they still count after a reload or resume.
+    if (m.role === 'user') said.push(...midTurnTexts(m.text))
     if (m.role === 'assistant') {
       for (const use of m.toolUses ?? []) if (use.tool === 'AskUserQuestion' && use.text) said.push(...dialogAnswers(use.text))
     }

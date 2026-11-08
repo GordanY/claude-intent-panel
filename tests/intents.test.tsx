@@ -136,6 +136,9 @@ test('goals show in the pane, tick once their check passes, and are saved for th
   expect((await ui.find({ type: 'Button', key: 'done-toggle' }))?.text).toBe('✓ 已完成 1 項 ▸')
   await ui.press({ key: 'done-toggle' })
   expect((await ui.find({ type: 'Text', text: /草稿要保留/ }))?.text).toBe('✓ 1. 關掉 app 後草稿要保留')
+  // The evidence is not listed under each done item; ⋯ shows it on demand.
+  expect(await ui.find({ type: 'Text', text: /依據/ })).toBeUndefined()
+  await ui.press({ key: 'details-1' })
   expect((await ui.find({ type: 'Text', text: /依據/ }))?.text).toBe('  依據：DraftPersistTests 3/3 通過')
   await ui.unmount()
 
@@ -1220,4 +1223,44 @@ test('a changed request carries the parts that still apply to the new one', asyn
   } as never)
   const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
   expect(saved.intents.filter(one => one.parent === '5' && !one.closed).length).toBe(3)
+})
+
+test('a message typed mid-turn still counts as the person\'s words after a reload, read from the transcript', async ($, on) => {
+  engine(on)
+  await start($)
+  // No live capture (a reload lost it): only the transcript holds the message, beside a tool result.
+  setMessages(() => ({
+    value: [
+      {
+        role: 'user',
+        text: 'The user sent a new message while you were working:\ni regret, please dont leave any history in the pane, just always show the latest\n\nThis is how Claude Code surfaces messages the user sends mid-turn.',
+        toolUses: [],
+        toolResults: [{ tool_use_id: 'x', text: 'ok' }],
+      },
+    ],
+  }))
+  const added = await $.tool.call({
+    tool: ADD,
+    intents: [{ summary: '只顯示最新', check: 'x', source: 'please dont leave any history in the pane, just always show the latest' }],
+  } as never)
+  expect('deny' in added).toBe(false)
+  // The wrapper sentence is the engine's, not the person's.
+  const wrapper = await $.tool.call({ tool: ADD, intents: [{ summary: 'y', check: 'y', source: 'This is how Claude Code surfaces messages' }] } as never)
+  expect('deny' in wrapper).toBe(true)
+})
+
+test('when a turn ends, nothing shows as happening now (except what a running subagent does)', async ($, on) => {
+  engine(on)
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: '{"onTrack": true}', usage: USAGE } }))
+  await seed($)
+  await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await texts(pane)).toContain('現在：測試')
+  await pane.unmount()
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await texts(pane)).some(x => x.includes('現在'))).toBe(false)
+  await pane.unmount()
 })

@@ -16,6 +16,7 @@ import {
   listText,
   nextId,
   normalize,
+  midTurnTexts,
   partsOf,
   personTexts,
   resolveId,
@@ -540,7 +541,12 @@ async function checkTurn($: EngineInterface, durationMs = 0, mode: 'turn' | 'res
   const turnStart = (await $.clock.now()) - durationMs - 1_000
   const midTurn =
     mode === 'turn'
-      ? (await read($, heardSaid)).filter(one => one.at >= turnStart && one.text !== asked.text.trim()).map(one => one.text)
+      ? [
+          ...new Set([
+            ...messages.slice(start + 1).flatMap(m => (m.role === 'user' ? midTurnTexts(m.text) : [])),
+            ...(await read($, heardSaid)).filter(one => one.at >= turnStart && one.text !== asked.text.trim()).map(one => one.text),
+          ]),
+        ]
       : []
   const personWords = [...personTexts([asked], []), ...midTurn]
 
@@ -1139,6 +1145,10 @@ export const register: Register = on => {
       if (partId && !Object.values(await read($, agentLinks)).includes(partId)) await update($, activity, a => without(a, partId))
       return done
     }
+    // The turn is over: nothing is happening now, except what running subagents do.
+    const working = new Set(Object.values(await read($, agentLinks)))
+    await update($, activity, a => Object.fromEntries(Object.entries(a).filter(([k]) => working.has(k))))
+    await update($, stage, old => ({ ...old, now: null }))
     const told = await read($, notes)
     if (told.length > 0) {
       await update($, notes, () => [])
@@ -1662,14 +1672,6 @@ export const register: Register = on => {
                     onPress={() => update($, shownDetails, v => (v === one.id ? null : one.id))}
                   />
                 </Box>
-                {parts.length === 0 && (
-                  <Text dimColor wrap="wrap">
-                    {'  '}
-                    {t.evidence}
-                    {t.colon}
-                    {one.evidence}
-                  </Text>
-                )}
                 {parts.map(part => (
                   <Box key={`done-part-${part.id}`}>
                     <Text dimColor wrap="wrap">
@@ -1678,7 +1680,7 @@ export const register: Register = on => {
                     </Text>
                   </Box>
                 ))}
-                {details === one.id && detailsBlock({ ...one, evidence: '' }, '')}
+                {details === one.id && detailsBlock(one, '')}
               </Box>
             )
           })}
