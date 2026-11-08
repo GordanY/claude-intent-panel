@@ -54,6 +54,9 @@ const SUBAGENT_DENY = 'Only the main conversation updates the intent pane; leave
 /** The model the drift check runs on (the session's own model does the rest). */
 const DRIFT_MODEL = 'haiku'
 
+/** How often a session re-reads the shared list for changes made elsewhere. */
+const SYNC_MS = 2_000
+
 const TOOLS = {
   add: TOOL('intent_add'),
   list: TOOL('intent_list'),
@@ -204,11 +207,31 @@ async function refreshTitle($: EngineInterface, isAsked = false): Promise<void> 
   await $.ui.open({ id: PANE, title })
 }
 
-/** Loads the worktree's list when the session's root is not the one loaded. */
+/**
+ * Brings the live list in line with the saved one, the single source of truth.
+ * The store is one file shared by every session on this machine (terminal and
+ * desktop alike), so another session in the same worktree may have changed it:
+ * a newer saved copy is adopted, and reaches the model beside the next prompt.
+ * Every change reads first (here) and writes straight after (`save`).
+ */
 async function sync($: EngineInterface): Promise<void> {
   const root = await $.session.root()
   const prev = await read($, loadedRoot)
-  if (prev === root) return
+  if (prev === root) {
+    const saved = asSaved(await $.store.get(KEY + root))
+    const localAt = await read($, updatedAt)
+    // Same stamp: nothing changed elsewhere. A missing copy with a local stamp
+    // means another session cleared the list.
+    if ((saved?.updatedAt ?? null) === localAt) return
+    if (!saved && localAt === null) return
+    await update($, purpose, () => saved?.purpose ?? { ai: '', mine: '' })
+    await update($, intents, () => saved?.intents ?? [])
+    await update($, drift, () => saved?.drift ?? null)
+    await update($, updatedAt, () => saved?.updatedAt ?? null)
+    await update($, isDirty, () => true)
+    await refreshTitle($)
+    return
+  }
   const saved = asSaved(await $.store.get(KEY + root))
   // A live list from before lists were saved (a hot reload of an older
   // version) is adopted for this worktree, not wiped.
@@ -326,6 +349,7 @@ async function checkDrift($: EngineInterface): Promise<void> {
 
   const verdict = parseVerdict(answer.text)
   if (!verdict || verdict.isOnTrack || !verdict.note) return
+  await sync($)
   await update($, drift, () => ({ note: verdict.note, isByUser: verdict.isByUser }))
   await save($)
 }
@@ -346,6 +370,18 @@ export const register: Register = on => {
     await update($, now, () => at)
     $.clock.every(60_000, () => {
       void $.clock.now().then(t => update($, now, () => t))
+    })
+    // Another session in this worktree (a terminal beside the desktop app, or
+    // the reverse) may change the shared list or language: pick it up.
+    $.clock.every(SYNC_MS, () => {
+      void (async () => {
+        await sync($)
+        const shared = asLang(await $.store.get(LANG_KEY))
+        if (JSON.stringify(shared) !== JSON.stringify(await read($, lang))) {
+          await update($, lang, () => shared)
+          await refreshTitle($)
+        }
+      })().catch(() => undefined)
     })
 
     return next(e)
@@ -508,6 +544,7 @@ export const register: Register = on => {
     const saveMine = (target: string) => (value: string) => {
       void (async () => {
         const text = value.trim()
+        await sync($)
         if (target === 'purpose') await update($, purpose, old => ({ ...old, mine: text }))
         else await update($, intents, l => l.map(one => (one.id === target ? { ...one, mine: text } : one)))
         await update($, editing, () => null)
@@ -697,6 +734,7 @@ export const register: Register = on => {
             key="drift-add"
             label={t.addToList}
             onPress={async () => {
+              await sync($)
               await update($, intents, l => {
                 const n = l.reduce((max, one) => Math.max(max, Number(one.id) || 0), 0) + 1
                 return [...l, { id: String(n), ai: off.note, mine: '', check: '', isMet: false, evidence: '' }]
@@ -711,6 +749,7 @@ export const register: Register = on => {
             key="drift-ignore"
             label={t.ignore}
             onPress={async () => {
+              await sync($)
               await update($, drift, () => null)
               await save($)
             }}

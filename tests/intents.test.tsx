@@ -516,3 +516,67 @@ test('a drift warning sits above the goals, where it is seen first', async ($, o
   expect(driftAt >= 0 && goalAt > driftAt).toBe(true)
   await pane.unmount()
 })
+
+test('a change another session saves for this worktree shows here and reaches the model', async ($, on) => {
+  const store = engine(on)
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  await seed($)
+  await $.prompt.submit({ text: '開始' })
+
+  // The other session (a terminal beside the desktop app) ticks goal 1 and adds its own words.
+  const shared = store.get(`wt:${ROOT}`) as typeof SAVED & { updatedAt: number }
+  store.set(`wt:${ROOT}`, {
+    ...shared,
+    intents: shared.intents.map(one => (one.id === '1' ? { ...one, isMet: true, evidence: '在終端機跑過 3/3', mine: '草稿要在' } : one)),
+    updatedAt: shared.updatedAt + 1,
+  })
+  await ui.clock.advance(2_000)
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await pane.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
+  await pane.unmount()
+
+  const next = await $.prompt.submit({ text: '繼續' })
+  expect('context' in next && next.context?.some(c => c.includes('在終端機跑過 3/3'))).toBe(true)
+})
+
+test("a change made here builds on the other session's newer copy, never over it", async ($, on) => {
+  const store = engine(on)
+  await seed($)
+
+  // Before this session's timer fires, the other session adds a goal.
+  const shared = store.get(`wt:${ROOT}`) as typeof SAVED & { updatedAt: number }
+  store.set(`wt:${ROOT}`, {
+    ...shared,
+    intents: [...shared.intents, { id: '3', ai: '別的 session 加的', mine: '', check: '看得到', isMet: false, evidence: '' }],
+    updatedAt: shared.updatedAt + 1,
+  })
+  await $.tool.call({ tool: MET, id: '2', evidence: 'diff 不含 Sync/' } as never)
+
+  const saved = store.get(`wt:${ROOT}`) as typeof SAVED
+  expect(saved.intents.length).toBe(3)
+  expect(saved.intents.find(one => one.id === '2')?.isMet).toBe(true)
+  expect(saved.intents.find(one => one.id === '3')?.ai).toBe('別的 session 加的')
+})
+
+test('a list another session cleared is cleared here too', async ($, on) => {
+  const store = engine(on)
+  await seed($)
+  store.delete(`wt:${ROOT}`)
+  await ui.clock.advance(2_000)
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await pane.find({ type: 'Text', text: /還沒有目標/ }))?.text).toBe('還沒有目標。')
+  await pane.unmount()
+})
+
+test('a language another session picks is applied here', async ($, on) => {
+  const store = engine(on)
+  await seed($)
+  store.set('settings:lang', { code: 'en' })
+  await ui.clock.advance(2_000)
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Text', text: /Check/ }))?.text).toBe('  Check: DraftPersistTests 通過')
+  await pane.unmount()
+})

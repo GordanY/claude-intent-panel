@@ -6,13 +6,13 @@ A Claude Code mod that keeps a side pane, **🎯 Goals**, showing in plain words
 - **Your own words**: press ✎ beside the purpose or a goal to write it your way; it reaches Claude beside your next prompt and is treated as authoritative, and it leads where both are shown.
 - **Auto-tick with evidence**: Claude ticks a goal only after its check actually ran and passed, and records the evidence. A tick without evidence is refused.
 - **Drift warning**: after each turn a small model (Haiku) checks the turn against the list and flags off-list work, with *add to list* / *ignore* buttons.
-- **Per worktree**: the list is saved per project root, so quitting the CLI and resuming shows the same pane. When a worktree's folder is removed (its parent folder still present), its list is deleted at the next CLI start. A **⌫ Clear list** button (two presses) resets it.
+- **Per worktree, one source of truth**: the list is saved per project root in one store shared by every session on this machine, so quitting the CLI and resuming shows the same pane, and a terminal session and a desktop-app session in the same worktree show the same list: a change in either (a tick, your own words, a drift note, the language) appears in the other within about two seconds and reaches its model beside the next prompt. Every change reads the shared copy first, so neither overwrites the other. When a worktree's folder is removed (its parent folder still present), its list is deleted at the next CLI start. A **⌫ Clear list** button (two presses) resets it.
 
 - **Language**: English by default. Pick 🌐 at the bottom of the pane: English, 中文, 日本語, or type your own. The choice is saved on your machine for every worktree and session. It sets the pane's labels (a custom language keeps English labels) and the language Claude writes the purpose, goals, checks, evidence and drift notes in. Text already written stays as it is until you press ↻.
 
 ## Where it runs
 
-Only in sessions a person can see. A headless session (`claude -p`, the SDK, automation that runs Claude without a REPL) gets no pane, no instructions, no tools and no drift check. Subagents and teammates cannot change the main conversation's list. An interactive session another tool opens for you in a terminal is an ordinary session and does get the pane.
+In the terminal and in the desktop app's Code tab alike: a user-scope install loads in both, and the pane draws on either surface. Only in sessions a person can see. A headless session (`claude -p`, the SDK, automation that runs Claude without a REPL) gets no pane, no instructions, no tools and no drift check. Subagents and teammates cannot change the main conversation's list. An interactive session another tool opens for you in a terminal is an ordinary session and does get the pane.
 
 ## Install
 
