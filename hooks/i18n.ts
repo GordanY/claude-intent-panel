@@ -104,6 +104,7 @@ export type Strings = {
   autoStale: (ids: readonly string[]) => string
   nowLabel: string
   staleLabel: string
+  checkedLast: string
   seenInOutput: string
   confirmCancelItem: string
   cancelYes: string
@@ -186,6 +187,7 @@ const EN: Strings = {
   autoStale: ids => `flagged ${ids.join(', ')} as maybe out of date`,
   nowLabel: 'now',
   staleLabel: 'may be out of date',
+  checkedLast: 'checked last',
   seenInOutput: 'seen in output',
   confirmCancelItem: 'Cancel this item?',
   cancelYes: 'Cancel it',
@@ -284,6 +286,7 @@ const ZH: Strings = {
   autoStale: ids => `標記 ${ids.join('、')} 可能過時`,
   nowLabel: '現在',
   staleLabel: '可能過時',
+  checkedLast: '最後驗證',
   seenInOutput: '從輸出看到',
   confirmCancelItem: '取消這一項？',
   cancelYes: '取消它',
@@ -384,6 +387,7 @@ const JA: Strings = {
   autoStale: ids => `${ids.join('、')} を古い可能性ありと記録`,
   nowLabel: '現在',
   staleLabel: '古い可能性あり',
+  checkedLast: '最後に確認',
   seenInOutput: '出力で確認',
   confirmCancelItem: 'この項目を取り消しますか？',
   cancelYes: '取り消す',

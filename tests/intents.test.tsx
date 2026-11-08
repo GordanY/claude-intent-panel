@@ -1920,3 +1920,44 @@ test('the observer does not tick from a suite-wide summary line: the quoted line
   expect(saved.intents.find(one => one.id === '1')?.isMet).toBe(false)
   expect(saved.intents.find(one => one.id === '2')?.isMet).toBe(true)
 })
+
+test('a goal true from the start ("sync stays untouched") is checked last: nobody can tick it until the rest is done', async ($, on) => {
+  engine(on)
+  on('ui.toast', () => ({ value: undefined }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({
+    value: {
+      isAnswered: true,
+      text: JSON.stringify({ onTrack: true, met: [{ id: '1b', quote: 'git diff --stat: Sync/ untouched', evidence: '沒動到 Sync' }] }),
+      usage: USAGE,
+    },
+  }))
+  await start($)
+  await $.tool.call({
+    tool: ADD,
+    intents: [
+      { summary: '草稿要保留', check: '整體', source: '修好草稿消失的問題' },
+      { summary: '關掉 app 後草稿還在', check: 'DraftPersistTests', parent: '+1' },
+      { summary: '同步沒有被動到', check: 'git diff 不含 Sync/', parent: '+1', atEnd: true },
+    ],
+  } as never)
+  // Claude cannot tick it early.
+  const early = await $.tool.call({ tool: MET, id: '1b', evidence: 'diff 乾淨' } as never)
+  expect('deny' in early && String(early.deny).includes('checked last') && String(early.deny).includes('1a')).toBe(true)
+  // Nor can the observer, even with a line naming it.
+  setMessages(() => ({
+    value: [
+      { role: 'user', text: '修好草稿消失的問題', toolUses: [] },
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'g', tool: 'Bash', input: { command: 'git diff --stat' }, text: 'git diff --stat: Sync/ untouched' }] },
+    ],
+  }))
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await texts(pane)).toContain('  ○ 1b. 同步沒有被動到（最後驗證）')
+  await pane.unmount()
+  // Once the rest is done, it can be ticked.
+  await $.tool.call({ tool: MET, id: '1a', evidence: 'DraftPersistTests 3/3' } as never)
+  const last = await $.tool.call({ tool: MET, id: '1b', evidence: 'git diff 不含 Sync/' } as never)
+  expect('deny' in last).toBe(false)
+})

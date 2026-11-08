@@ -282,7 +282,7 @@ function statusText(list: readonly Intent[], one: Intent): string {
     return met === parts.length ? `met (all ${met} parts)` : `open (${met}/${parts.length} parts met)`
   }
   if (one.isMet) return `met${one.isAuto ? ' (seen in output)' : ''}`
-  const flags = [one.isActive ? 'ACTIVE' : '', one.isStale ? 'STALE: may no longer apply, re-plan' : ''].filter(Boolean).join(', ')
+  const flags = [one.isActive ? 'ACTIVE' : '', one.isStale ? 'STALE: may no longer apply, re-plan' : '', one.atEnd ? 'checked last' : ''].filter(Boolean).join(', ')
   return `${one.isAuto ? `open (added${auto})` : 'open'}${flags ? ` [${flags}]` : ''}`
 }
 
@@ -427,7 +427,7 @@ export function briefText(p: Purpose, list: readonly Intent[]): string {
   const { met, total } = progress(list)
   const lines = [`Purpose: ${p.mine || p.ai || '(unset)'}`, `Progress: ${met}/${total} parts met. Details: intent_list.`]
   const state = (one: Intent) =>
-    one.isMet ? 'met' : one.isStale ? 'stale' : one.isActive ? 'active' : one.isAuto ? 'open, auto' : 'open'
+    (one.isMet ? 'met' : one.isStale ? 'stale' : one.isActive ? 'active' : one.isAuto ? 'open, auto' : 'open') + (one.atEnd && !one.isMet ? ', last' : '')
   const live = list.filter(one => isRequest(one) && isLive(one))
   const finished: string[] = []
   for (const request of live) {
@@ -482,4 +482,15 @@ export function mentions(line: string, about: string): boolean {
     for (let n = 0; n + 2 <= run.length; n += 1) if (said.includes(run.slice(n, n + 2)) && !['測試', '通過', '檢查', '對應'].includes(run.slice(n, n + 2))) return true
     return false
   })
+}
+
+/**
+ * What must be done before an item checked last may be ticked: the other
+ * open parts of its request, or, for a request, every other open goal on
+ * the list (other last checks aside).
+ */
+export function blockersOf(list: readonly Intent[], one: Intent): Intent[] {
+  if (!one.atEnd) return []
+  const open = units(list).filter(x => x.id !== one.id && !x.isMet && !x.atEnd)
+  return one.parent ? open.filter(x => x.parent === one.parent) : open.filter(x => x.parent !== one.id)
 }

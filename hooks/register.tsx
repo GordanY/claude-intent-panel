@@ -35,6 +35,7 @@ import {
   withoutLimits,
   progress,
   advance,
+  blockersOf,
   NO_STAGE,
   restore,
   said,
@@ -319,7 +320,7 @@ type Saved = { purpose: Purpose; intents: Intent[]; drift: Drift | null; updated
 
 const instructions = (language: string) => `# Intent pane (intent-tracker mod)
 A pane shows the person, in plain ${language}, what they asked for in this worktree and how far it has got. Keep it accurate and quiet (never narrate these calls); write all pane text in ${language}, no jargon in summaries.
-- REQUESTS: only what the person asked for, each with \`source\` = their exact words (verified; never your ideas or technical steps; your suggestion joins only after their yes). Every request is a goal, an outcome. "Don't do X" / "don't touch X" is the goal "X stays untouched", its check verified when the work is done (e.g. the diff leaves X alone).
+- REQUESTS: only what the person asked for, each with \`source\` = their exact words (verified; never your ideas or technical steps; your suggestion joins only after their yes). Every request is a goal, an outcome. "Don't do X" / "don't touch X" is the goal "X stays untouched" with \`atEnd: true\` (a part of the request it protects, or a request of its own): it is true from the start, so it can be ticked only once the rest is done, its check run then (e.g. the diff leaves X alone).
 - PARTS (\`parent\`): break each goal into plain outcomes the person would recognise, never steps. Bug: "no longer happens" + "nothing else broke"; feature: each visible behaviour; refactor: "behaves the same"; question: "you have your answer"; release: each irreversible outcome. A small follow-up refining a request is a part with its own \`source\`. Keep parts in order (\`position\`); mark the ones being worked on \`active: true\` (any number); give \`agent: "<words of its description>"\` when a subagent works on one. Change parts freely; the person gets a notice.
 - CHECKS name the specific proof (a test name, a command, a behaviour to see), never just "tests pass".
 - RECORD FIRST: when a message asks for something, record it before starting the work. A question is not a request.
@@ -356,6 +357,7 @@ const toolSpecs = [
               },
               parent: { type: 'string', description: 'A part: its request id ("+N" = the Nth item of this call).' },
               replaces: { type: 'string', description: 'A request replacing an earlier one the person changed: that id.' },
+              atEnd: { type: 'boolean', description: 'Checked last ("X stays untouched"): tickable only once the rest is done.' },
             },
             required: ['summary', 'check'],
           },
@@ -395,6 +397,7 @@ const toolSpecs = [
         active: { type: 'boolean', description: 'A part: being worked on now, or not.' },
         agent: { type: 'string', description: 'A part: words of the description of the subagent working on it.' },
         position: { type: 'number', description: "A part: its 1-based place among its request's parts." },
+        atEnd: { type: 'boolean', description: 'Checked last ("X stays untouched"), or not.' },
       },
     },
     isDeferred: false,
@@ -617,7 +620,7 @@ async function sweep($: EngineInterface): Promise<void> {
   }
 }
 
-type Quoted = { id: string; quote: string; summary: string; check: string; evidence: string; parent: string }
+type Quoted = { id: string; quote: string; summary: string; check: string; evidence: string; parent: string; atEnd: boolean }
 
 type Verdict = {
   isOnTrack: boolean
@@ -645,6 +648,7 @@ function parseVerdict(text: string): Verdict | null {
           check: str(m.check),
           evidence: str(m.evidence ?? m.why),
           parent: str(String(m.parent ?? '')),
+          atEnd: m.atEnd === true,
         }))
     return {
       isOnTrack: value.onTrack !== false,
@@ -788,7 +792,7 @@ async function checkTurn($: EngineInterface, durationMs = 0, mode: 'turn' | 'res
       `"met": [{"id": "<id>", "quote": "<the key line, copied exactly from the tool output above>", "evidence": "<one short line in ${language} naming that output>"}], ` +
       `"stale": [{"id": "<part id>", "why": "<one short line in ${language}>"}]` +
       (isTurn
-        ? `, "add": [{"quote": "<their exact words>", "parent": "<request id, only when it is a small follow-up refining that request>", "summary": "<one plain sentence in ${language}, no jargon>", "check": "<how to prove it, in ${language}>"}], ` +
+        ? `, "add": [{"quote": "<their exact words>", "atEnd": <true for "X stays untouched", which is true from the start and checked last>, "parent": "<request id, only when it is a small follow-up refining that request>", "summary": "<one plain sentence in ${language}, no jargon>", "check": "<how to prove it, in ${language}>"}], ` +
           '"cancel": [{"id": "<request id>", "quote": "<their exact words>"}], ' +
           `"replace": [{"id": "<request id>", "quote": "<their exact words>", "summary": "<the new request, plain ${language}>", "check": "<how to prove it>"}]`
         : '') +
@@ -834,7 +838,10 @@ async function checkTurn($: EngineInterface, durationMs = 0, mode: 'turn' | 'res
   // And it must name the item itself (a test name, a file, a word of its check): a summary line such as
   // "68 pass / 0 fail" fits every item, so it proves none of them.
   const isAbout = (one: Intent, quote: string) => mentions(quote, `${one.check} ${one.ai} ${one.mine}`)
-  const ticks = pick(verdict.met, (one, m) => open.has(one.id) && isInOutput(m.quote) && isAbout(one, m.quote))
+  const ticks = pick(
+    verdict.met,
+    (one, m) => open.has(one.id) && blockersOf(current, one).length === 0 && isInOutput(m.quote) && isAbout(one, m.quote),
+  )
   const stales = pick(verdict.stale, one => isLive(one) && !!one.parent && !one.isMet && !one.isStale)
   // Items Claude itself changed this turn are left to it.
   const cancels = pick(verdict.cancel, (one, m) => isLive(one) && isRequest(one) && !touchedIds.has(one.id) && isHeard(m.quote))
@@ -884,6 +891,7 @@ async function checkTurn($: EngineInterface, durationMs = 0, mode: 'turn' | 'res
           source: m.quote,
           history: [entry(at, 'auto', 'added', m.quote)],
           ...(parent ? { parent: parent.id } : {}),
+          ...(m.atEnd ? { atEnd: true } : {}),
         }
       }
       for (const r of replaces) {
@@ -1077,6 +1085,7 @@ export const register: Register = on => {
         source: str(g.source),
         parent: str(g.parent),
         replaces: str(g.replaces),
+        atEnd: g.atEnd === true,
       }))
       .filter(g => g.summary)
       // Requests take the next numbers; parts their own ids, so request numbers run on without gaps.
@@ -1136,6 +1145,7 @@ export const register: Register = on => {
           isMet: false,
           evidence: '',
           history: [entry(at, 'claude', 'added', item.source || undefined)],
+          ...(item.atEnd ? { atEnd: true } : {}),
           ...(item.parent
             ? { parent: parentOf(item.parent), ...(item.source ? { source: item.source } : {}) }
             : { source: item.source }),
@@ -1191,6 +1201,12 @@ export const register: Register = on => {
     if (one.closed) return { deny: `Item ${id} is ${one.closed.as}; restore it first (intent_revise restore: true) if it applies again.` }
     if (partsOf(list, id).length > 0) return { deny: `Request ${id} has parts: tick its parts; the request is done when all of them are.\n${listText(p, list)}` }
     if (!evidence) return { deny: 'evidence is required: name the check you ran and what it showed.' }
+    const waiting = blockersOf(list, one)
+    if (waiting.length > 0) {
+      return {
+        deny: `${labelOf(list, one)} is checked last (true from the start): tick it once these are done: ${waiting.map(x => labelOf(list, x)).join(', ')}.`,
+      }
+    }
     const at = await $.clock.now()
     await update($, intents, l =>
       l.map(item =>
@@ -1255,6 +1271,11 @@ export const register: Register = on => {
             changed = withHistory({ ...changed, isMet: false, evidence: '', isAuto: false }, entry(at, 'claude', 'reopened'))
           }
           if (typeof args.active === 'boolean') changed = { ...changed, isActive: args.active }
+          if (typeof args.atEnd === 'boolean') {
+            changed = { ...changed }
+            if (args.atEnd) changed.atEnd = true
+            else delete changed.atEnd
+          }
           if (typeof args.agent === 'string') {
             changed = { ...changed, isActive: true }
             if (str(args.agent)) changed.agent = str(args.agent)
@@ -1883,6 +1904,7 @@ export const register: Register = on => {
         one.isMet && one.isAuto ? t.seenInOutput : '',
         !one.isMet && one.isAuto ? t.autoMark : '',
         one.isStale && !one.isMet ? t.staleLabel : '',
+        one.atEnd && !one.isMet ? t.checkedLast : '',
       ].filter(Boolean)
       return (
         <Box key={`goal-${one.id}`} flexDirection="column">

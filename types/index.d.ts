@@ -75,6 +75,11 @@ export type Intent = {
   /** Planned phases of v0.12 (no longer used; kept so older lists load). */
   phases?: Phase[]
   phase?: string
+  /**
+   * Checked last: a goal true from the start ("X stays untouched") is ticked
+   * only once the rest of its request (or, for a request, of the list) is done.
+   */
+  atEnd?: boolean
   /** A part's letter under its request ("b" in "1b"), given once and never reused. */
   letter?: string
   /** Being worked on now, by Claude or a subagent sent for it; any number at once. */
