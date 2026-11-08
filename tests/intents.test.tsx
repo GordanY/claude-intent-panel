@@ -2706,3 +2706,45 @@ test("a line's mark and number never wrap: their column does not shrink", async 
   }
   await pane.unmount()
 })
+
+test('a heading names the open section and its count', async ($, on) => {
+  engine(on)
+  await seed($)
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  let shown = await texts(pane)
+  // Right under the goals' divider, before the first card.
+  const at = shown.indexOf('進行中 2')
+  expect(at).toBeGreaterThan(0)
+  expect(/^─+$/.test(shown[at - 1] ?? '')).toBe(true)
+  expect(shown[at + 1]).toBe('-')
+  await pane.unmount()
+  await $.tool.call({ tool: MET, id: '2', evidence: 'git diff 不含 Sync/' } as never)
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  shown = await texts(pane)
+  expect(shown).toContain('進行中 1')
+  await pane.unmount()
+})
+
+test('a background command quiet for ten minutes is drawn faded', async ($, on) => {
+  engine(on)
+  const running = heldTools(on, e => (e.run_in_background ? { result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bg-q' } } : { result: 'ok' }))
+  on('fs.read', () => ({ value: 'still waiting…\n' }) as never)
+  await running(() => seed($), async () => {})
+  await running(() => $.tool.call({ tool: 'Bash', command: 'tail -f log', description: 'watch the log', run_in_background: true } as never), async () => {})
+  ui.messages = [ASK, { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'w', tool: 'Bash', input: {}, text: 'Command running in background with ID: bg-q. Output is being written to: /tmp/t/q.output.' }] }]
+  ui.files['/tmp/t/q.output'] = 1_700_000_000_000
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+  const look = async () => {
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const line = await pane.find({ type: 'Text', text: /watch the log/ })
+    await pane.unmount()
+    return { dim: line?.props.dimColor === true, color: line?.props.color }
+  }
+  // Recent output: drawn as busy.
+  expect(await look()).toEqual({ dim: false, color: 'cyan' })
+  // Ten quiet minutes on: faded.
+  await ui.clock.advance(10 * 60_000)
+  await ui.clock.settle()
+  expect((await look()).dim).toBe(true)
+})

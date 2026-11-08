@@ -334,6 +334,8 @@ const isRemovedOpen = atom({ plugin: 'intent-tracker', key: 'isRemovedOpen' } as
 const isDoneOpen = atom({ plugin: 'intent-tracker', key: 'isDoneOpen' } as const, false)
 /** Whether every finished request shows, not only the latest few. */
 const isDoneAll = atom({ plugin: 'intent-tracker', key: 'isDoneAll' } as const, false)
+/** A background command this long without new output is drawn faded. */
+const QUIET_FADE_MS = 10 * 60_000
 /** How many finished requests show before "show all". */
 const DONE_SHOWN = 5
 
@@ -2196,7 +2198,11 @@ export const register: Register = on => {
         <Text dimColor>{t.alongside}</Text>
         {running.map(([key, item]) => (
           <Box key={`bg-${key}`}>
-            <Text color={pal.now} wrap="wrap">
+            {/* Quiet for ten minutes or more: drawn faded, so it no longer reads as busy. */}
+            <Text
+              {...(item.lastOutputAt && nowMs - item.lastOutputAt >= QUIET_FADE_MS ? { dimColor: true } : { color: pal.now })}
+              wrap="wrap"
+            >
               {'  '}
               {key.startsWith('agent:') ? t.subagent : t.backgroundCommand}
               {chosen.code === 'zh' || chosen.code === 'ja' ? `「${item.label}」` : ` "${item.label}"`}
@@ -2430,7 +2436,7 @@ export const register: Register = on => {
         const parts = partsOf(list, one.id).filter(part => !isSettled(part))
         return sum + 2 + itemRows(one, 4) + parts.reduce((n, part) => n + itemRows(part, 6) + (part.isActive ? rowsOf(part.check, 8) : 0), 0)
       }, 0)
-    const fixedRows = 3 + (p.mine && p.ai && p.mine !== p.ai ? 1 : 0) + Object.keys(await read($, background)).length + 14
+    const fixedRows = 3 + (p.mine && p.ai && p.mine !== p.ai ? 1 : 0) + Object.keys(await read($, background)).length + 15
     const allDoneRows = doneRequests.reduce((sum, one) => sum + itemRows(one, 2), 0)
     const hasRoom = fill !== undefined && fixedRows + openRows + allDoneRows <= fill
     const showAllDone = hasRoom || (await read($, isDoneAll))
@@ -2565,8 +2571,11 @@ export const register: Register = on => {
           {driftBox}
           {openRequests.length > 0 && divider('div-goals')}
           {openRequests.length > 0 && (
-            // Each open request its own card, its parts inside it.
+            // Each open request its own card, its parts inside it, under a heading with their count.
             <Box flexDirection="column" gap="sm">
+              <Text key="open-heading" bold dimColor>
+                {t.openHeading(openRequests.length)}
+              </Text>
               {openRequests.map(one => (
                 <Box key={`card-${one.id}`} flexDirection="column" borderStyle="round" borderDimColor paddingX="sm">
                   {goalRow(one, '')}

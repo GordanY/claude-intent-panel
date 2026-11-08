@@ -52,6 +52,7 @@ export type Strings = {
   opened: string
   empty: string
   doneGroup: (n: number) => string
+  openHeading: (n: number) => string
   showAll: (n: number) => string
   showLatest: (n: number) => string
   driftShort: string
@@ -146,6 +147,7 @@ const EN: Strings = {
   opened: 'Goals pane opened.',
   empty: 'No goals yet.',
   doneGroup: n => `${n} done`,
+  openHeading: n => `In progress ${n}`,
   showAll: n => `show all ${n}`,
   showLatest: n => `show the latest ${n}`,
   driftShort: 'drift',
@@ -256,6 +258,7 @@ const ZH: Strings = {
   opened: '已打開本次目標面板。',
   empty: '還沒有目標。',
   doneGroup: n => `已完成 ${n} 項`,
+  openHeading: n => `進行中 ${n}`,
   showAll: n => `顯示全部 ${n} 項`,
   showLatest: n => `只顯示最近 ${n} 項`,
   driftShort: '偏題',
@@ -368,6 +371,7 @@ const JA: Strings = {
   opened: '目標パネルを開きました。',
   empty: 'まだ目標がありません。',
   doneGroup: n => `${n} 件完了`,
+  openHeading: n => `進行中 ${n}`,
   showAll: n => `すべて表示（${n} 件）`,
   showLatest: n => `最新 ${n} 件のみ表示`,
   driftShort: '脱線',
