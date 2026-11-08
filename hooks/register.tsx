@@ -2343,7 +2343,7 @@ export const register: Register = on => {
     ) => (
       <Box key={key} flexDirection="row" gap={1} flexGrow={1} flexShrink={1}>
         {/* The head keeps its width: squeezed, "○ 34." would break over two lines. */}
-        <Box flexShrink={0}>
+        <Box flexShrink={0} minWidth={cells(head)}>
           <Text {...look}>{head}</Text>
         </Box>
         <Box flexGrow={1} flexShrink={1}>

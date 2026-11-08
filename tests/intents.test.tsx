@@ -2702,6 +2702,8 @@ test("a line's mark and number never wrap: their column does not shrink", async 
     const head = (line.children as { props?: Record<string, unknown> }[])[0]
     // The head's own column keeps its width; only the words beside it wrap.
     expect(head?.props?.flexShrink).toBe(0)
+    // At least as wide as the head itself ("○ 1a." is five cells).
+    expect(Number(head?.props?.minWidth)).toBe(JSON.stringify(head).includes('1a.') ? 5 : 4)
     expect(JSON.stringify(head)).not.toContain('"wrap"')
   }
   await pane.unmount()
