@@ -122,7 +122,10 @@ export type Strings = {
   history: string
   actor: Record<'person' | 'claude' | 'auto', string>
   what: Record<'added' | 'edited' | 'met' | 'reopened' | 'confirmed' | 'cancelled' | 'replaced' | 'restored' | 'broken' | 'holding', string>
-  stage: Record<'plan' | 'investigate' | 'build' | 'test' | 'fix' | 'review', string>
+  stage: Record<'plan' | 'investigate' | 'build' | 'test' | 'fix' | 'review' | 'think' | 'run', string>
+  alongside: string
+  subagent: string
+  backgroundCommand: string
   startPrompt: (tools: Tools, lang: string) => string
   refreshPrompt: (tools: Tools, lang: string) => string
 }
@@ -214,7 +217,10 @@ const EN: Strings = {
     broken: 'broken',
     holding: 'holding again',
   },
-  stage: { plan: 'Plan', investigate: 'Investigate', build: 'Build', test: 'Test', fix: 'Fix', review: 'Review' },
+  stage: { plan: 'Plan', investigate: 'Investigate', build: 'Build', test: 'Test', fix: 'Fix', review: 'Review', think: 'Thinking', run: 'Running' },
+  alongside: 'Also running',
+  subagent: 'Subagent',
+  backgroundCommand: 'Background command',
   startPrompt: (t, lang) =>
     `(Goals pane) From the conversation so far, set out what this work is for and its goals: use ${t.add} to set a one-line plain-language purpose and the requests I actually made (each quoting my own words as its source; limits I set count too), each goal request broken into plain parts I would recognise, each with a concrete check; tick goals already verified in the conversation with ${t.met} and the evidence. ` +
     `Use only what actually happened in the conversation; if it is not yet clear what we are doing, just ask me. Write everything in ${lang}. When done, tell me in a sentence or two.`,
@@ -311,7 +317,10 @@ const ZH: Strings = {
     broken: '被破壞',
     holding: '恢復守住',
   },
-  stage: { plan: '規劃', investigate: '調查', build: '實作', test: '測試', fix: '修正', review: '審查' },
+  stage: { plan: '規劃', investigate: '調查', build: '實作', test: '測試', fix: '修正', review: '審查', think: '思考中', run: '執行中' },
+  alongside: '同時進行',
+  subagent: '子代理',
+  backgroundCommand: '背景指令',
   startPrompt: (t, lang) =>
     '（目標面板）請依目前為止的對話，整理這次工作的原意和目標：' +
     `用 ${t.add} 設定一行白話的原意，和我真正提出的需求（每項以我的原話作 source；我設的限制也算），每個需求再拆成我看得懂的白話分項，每項附具體的檢查方式；` +
@@ -410,7 +419,10 @@ const JA: Strings = {
     broken: '破られた',
     holding: '再び維持',
   },
-  stage: { plan: '計画', investigate: '調査', build: '実装', test: 'テスト', fix: '修正', review: 'レビュー' },
+  stage: { plan: '計画', investigate: '調査', build: '実装', test: 'テスト', fix: '修正', review: 'レビュー', think: '思考中', run: '実行中' },
+  alongside: '並行中',
+  subagent: 'サブエージェント',
+  backgroundCommand: 'バックグラウンド処理',
   startPrompt: (t, lang) =>
     '（目標パネル）これまでの会話から、この作業の目的と目標を整理してください：' +
     `${t.add} で一行の平易な目的と、私が実際に出した依頼（それぞれ私の言葉を source として引用。私が決めた制約も含む）を設定し、各依頼を私に分かる平易な分項に分けて（それぞれ具体的な確認方法つき）、会話の中で実際に確認済みの目標は ${t.met} で根拠をつけてチェックしてください。` +

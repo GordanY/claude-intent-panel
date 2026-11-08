@@ -81,6 +81,19 @@ async function remember($: EngineInterface, texts: readonly string[]): Promise<v
 
 /** Each active part's live activity, from the tool calls of whoever works on it. */
 const activity = atom({ plugin: 'intent-tracker', key: 'activity' } as const, {} as Record<string, StageKey>)
+/** Work still running beside the main loop, not shown on a part: background commands and subagents. */
+const background = atom(
+  { plugin: 'intent-tracker', key: 'background' } as const,
+  {} as Record<string, { label: string; stage: StageKey; at: number }>,
+)
+const without = <T,>(m: Record<string, T>, key: string): Record<string, T> => Object.fromEntries(Object.entries(m).filter(([k]) => k !== key))
+
+/** A short name for a background item: a subagent's description without its leading [tag], or the command. */
+function shortLabel(text: string): string {
+  const plain = text.replace(/^\s*\[[^\]]*\]\s*/, '').replace(/\s+/g, ' ').trim()
+  return plain.length > 32 ? `${plain.slice(0, 31)}…` : plain
+}
+
 /** Running subagents linked to a part: agent id → part id. */
 const agentLinks = atom({ plugin: 'intent-tracker', key: 'agentLinks' } as const, {} as Record<string, string>)
 /** Subagents started in this session: agent id → description. */
@@ -104,6 +117,30 @@ function isAgentFor(description: string, words: string): boolean {
   const a = normalize(description)
   const b = normalize(words)
   return b.length > 0 && (a.includes(b) || b.includes(a))
+}
+
+/**
+ * Sets what is happening this instant for the loop that is acting: a linked
+ * subagent's part, or the main loop (its stage line and the active parts no
+ * subagent is on). A tool running shows its stage; between tools, thinking.
+ */
+async function setNow($: EngineInterface, agentId: string | undefined, step: StageKey): Promise<void> {
+  if (agentId) {
+    const partId = (await read($, agentLinks))[agentId]
+    if (partId) await update($, activity, a => ({ ...a, [partId]: step }))
+    else {
+      const key = `agent:${agentId}`
+      const at = await $.clock.now()
+      const description = (await read($, spawned))[agentId] ?? ''
+      await update($, background, b => ({ ...b, [key]: { label: shortLabel(description), stage: step, at } }))
+    }
+    return
+  }
+  const at = await $.clock.now()
+  await update($, stage, old => (step === 'think' ? { ...old, now: step, at } : advance(old, step, at)))
+  const linked = new Set(Object.values(await read($, agentLinks)))
+  const mine = (await read($, intents)).filter(one => one.parent && isLive(one) && one.isActive && !one.isMet && !linked.has(one.id))
+  if (mine.length > 0) await update($, activity, a => ({ ...a, ...Object.fromEntries(mine.map(one => [one.id, step])) }))
 }
 
 /** Where the work is now, from this session's own tool calls. */
@@ -829,6 +866,11 @@ export const register: Register = on => {
       // A background task's (or subagent's) notification is a result arriving:
       // the open goals ride beside it, as they do beside a finished tool call.
       if (!/<task-notification\b/.test(e.text)) return next(e)
+      // Its background command is done: no longer running.
+      for (const m of e.text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) {
+        const key = `cmd:${(m[1] ?? '').trim()}`
+        await update($, background, b => without(b, key))
+      }
       await sync($)
       const note = resultNote(await read($, intents))
       return next(note ? { ...e, context: [...(e.context ?? []), note] } : e)
@@ -1056,7 +1098,10 @@ export const register: Register = on => {
       if (str(args.agent)) {
         const words = str(args.agent)
         const running = Object.entries(await read($, spawned)).filter(([, description]) => isAgentFor(description, words))
-        if (running.length > 0) await update($, agentLinks, links => ({ ...links, ...Object.fromEntries(running.map(([agentId]) => [agentId, id])) }))
+        if (running.length > 0) {
+          await update($, agentLinks, links => ({ ...links, ...Object.fromEntries(running.map(([agentId]) => [agentId, id])) }))
+          await update($, background, b => Object.fromEntries(Object.entries(b).filter(([k]) => !running.some(([agentId]) => k === `agent:${agentId}`))))
+        }
       }
       if (args.active === false || cancel) await update($, activity, a => Object.fromEntries(Object.entries(a).filter(([k]) => k !== id)))
       // A part changed by Claude: told at the end of the turn (ticks and focus show for themselves).
@@ -1091,24 +1136,21 @@ export const register: Register = on => {
     const isVerify = call.tool === 'Bash' && VERIFY_COMMAND.test(command)
     const isTest = isVerify && TEST_COMMAND.test(command)
     const agentId = (e as { agentId?: string }).agentId
-    if (agentId) {
-      const partId = (await read($, agentLinks))[agentId]
-      const step = isVerify && !isTest ? 'build' : stageOf(call, isTest, false)
-      if (partId && step) await update($, activity, a => ({ ...a, [partId]: step }))
-      return next(e)
-    }
     const before = await read($, stage)
-    const step = isVerify && !isTest ? 'build' : stageOf(call, isTest, before.isTestFailing)
-    if (step) {
-      const at = await $.clock.now()
-      await update($, stage, old => advance(old, step, at))
-      const linked = new Set(Object.values(await read($, agentLinks)))
-      const mine = (await read($, intents)).filter(one => one.parent && isLive(one) && one.isActive && !one.isMet && !linked.has(one.id))
-      if (mine.length > 0) await update($, activity, a => ({ ...a, ...Object.fromEntries(mine.map(one => [one.id, step])) }))
-    }
-    if (!isResult(call)) return next(e)
+    const step = isVerify && !isTest ? 'build' : stageOf(call, isTest, agentId ? false : before.isTestFailing)
+    // While the tool runs, its stage; once it returns, the model is thinking again.
+    if (step) await setNow($, agentId, step)
     const done = await next(e)
-    if ('deny' in done) return done
+    if (step) await setNow($, agentId, 'think')
+    // A command sent to the background keeps running after its call returns: shown until its notification.
+    const taskId = !('deny' in done) && call.tool === 'Bash' ? (done.result as { backgroundTaskId?: unknown } | undefined)?.backgroundTaskId : undefined
+    if (typeof taskId === 'string' && taskId) {
+      const at = await $.clock.now()
+      const label = shortLabel(typeof call.description === 'string' && call.description ? call.description : command)
+      const kind: StageKey = isTest ? 'test' : isVerify ? 'build' : 'run'
+      await update($, background, b => ({ ...b, [`cmd:${taskId}`]: { label, stage: kind, at } }))
+    }
+    if (agentId || !isResult(call) || 'deny' in done) return done
     // A test run that failed turns the next edits into fixing; a passing one ends that.
     if (isTest && call.run_in_background !== true) await update($, stage, old => ({ ...old, isTestFailing: done.isError === true }))
     observeSoon($)
@@ -1119,6 +1161,13 @@ export const register: Register = on => {
     return { ...done, context: [...(done.context ?? []), reminder] }
   })
 
+  // A model request starting: that loop is thinking (until its next tool runs).
+  on('turn.step', async function* ($, e, next) {
+    if (await read($, isActive)) await setNow($, e.agentId, 'think')
+
+    return yield* next(e)
+  })
+
   // A subagent sent for a part: link it, so its activity shows on that part.
   on('agent.spawn', async ($, e, next) => {
     const done = await next(e)
@@ -1127,6 +1176,12 @@ export const register: Register = on => {
     await update($, spawned, m => ({ ...m, [agentId]: e.description }))
     const part = (await read($, intents)).find(one => one.parent && isLive(one) && one.agent && isAgentFor(e.description, one.agent))
     if (part) await update($, agentLinks, l => ({ ...l, [agentId]: part.id }))
+    else {
+      // Not sent for a part: shown on its own while it runs.
+      const at = await $.clock.now()
+      const first = stageOf({ tool: 'Agent', subagent_type: e.subagentType, description: e.description }, false, false) ?? 'think'
+      await update($, background, b => ({ ...b, [`agent:${agentId}`]: { label: shortLabel(e.description), stage: first, at } }))
+    }
 
     return done
   })
@@ -1139,7 +1194,7 @@ export const register: Register = on => {
     if (e.agentId) {
       const agentId = e.agentId
       const partId = (await read($, agentLinks))[agentId]
-      const without = <T,>(m: Record<string, T>, key: string) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== key))
+      await update($, background, b => without(b, `agent:${agentId}`))
       await update($, agentLinks, l => without(l, agentId))
       await update($, spawned, m => without(m, agentId))
       if (partId && !Object.values(await read($, agentLinks)).includes(partId)) await update($, activity, a => without(a, partId))
@@ -1444,6 +1499,24 @@ export const register: Register = on => {
         {t.stage[where.now]}
       </Text>
     )
+    // Still running beside the main loop (background commands, subagents not sent for a part).
+    const running = Object.entries(await read($, background))
+    const backgroundBlock = running.length > 0 && (
+      <Box flexDirection="column">
+        <Text dimColor>{t.alongside}</Text>
+        {running.map(([key, item]) => (
+          <Box key={`bg-${key}`}>
+            <Text color="cyan" wrap="wrap">
+              {'  '}
+              {key.startsWith('agent:') ? t.subagent : t.backgroundCommand}
+              {chosen.code === 'zh' || chosen.code === 'ja' ? `「${item.label}」` : ` "${item.label}"`}
+              {t.colon}
+              {t.stage[item.stage]}
+            </Text>
+          </Box>
+        ))}
+      </Box>
+    )
 
     const driftBox = off && (
       <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
@@ -1716,6 +1789,7 @@ export const register: Register = on => {
           {purposeBlock}
           {counted.total > 0 && progressBar}
           {stageLine}
+          {backgroundBlock}
         </Box>
         {driftBox}
         {openRequests.map(one => goalRow(one, ''))}

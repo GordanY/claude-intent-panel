@@ -795,6 +795,25 @@ test('a list saved before auto ticks existed loads and draws as it did', async (
 })
 
 const REVISE = 'mcp__intent-tracker__intent_revise'
+/**
+ * A tool beneath the mod that holds each call open until released, so a test
+ * can look at the pane while the tool is still running.
+ */
+function heldTools(on: On, result: (e: Record<string, unknown>) => unknown = () => ({ result: 'ok' })) {
+  let release: (() => void) | null = null
+  on('tool.call', async (_, e) => {
+    await new Promise<void>(r => (release = r))
+    return result(e as unknown as Record<string, unknown>) as never
+  })
+  return async (start: () => Promise<unknown>, look: () => Promise<void>) => {
+    release = null
+    const call = start()
+    for (let n = 0; n < 500 && !release; n += 1) await Promise.resolve()
+    await look()
+    ;(release as (() => void) | null)?.()
+    await call
+  }
+}
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
 
 async function texts(pane: { findAll: (q: { type: string }) => Promise<{ text?: string }[]> }) {
@@ -957,72 +976,6 @@ test('the person cancels in the pane; ⋯ shows their words, never a history', a
   expect(saved.intents.find(one => one.id === '2')?.closed).toMatchObject({ as: 'cancelled', by: 'person' })
 })
 
-test("after a turn, the person's missed request, drop or change is recorded from their own words only", async ($, on) => {
-  const store = engine(on)
-  const toasts: string[] = []
-  on('ui.toast', (_, e) => {
-    toasts.push(String((e as { text?: unknown }).text ?? e))
-    return { value: undefined }
-  })
-  on('turn.complete', () => ({ text: 'done' }))
-  on('model.complete', () => ({
-    value: {
-      isAnswered: true,
-      text: JSON.stringify({
-        onTrack: true,
-        cancel: [{ id: '2', quote: '同步那個不用管了' }],
-        replace: [{ id: '1', quote: '草稿改成自動存雲端', summary: '草稿自動存雲端', check: '雲端看得到' }],
-        // The second quote was never said: dropped.
-        add: [
-          { quote: '匯出 PDF 要能選頁', kind: 'goal', summary: '匯出 PDF 能選頁', check: '選 2 頁匯出得 2 頁' },
-          { quote: '順便升級套件', kind: 'goal', summary: '升級套件', check: 'x' },
-        ],
-      }),
-      usage: USAGE,
-    },
-  }))
-  await seed($)
-  setMessages(() => ({
-    value: [
-      { role: 'user', text: '同步那個不用管了。草稿改成自動存雲端，還有匯出 PDF 要能選頁', toolUses: [] },
-      { role: 'assistant', text: '好', toolUses: [] },
-    ],
-  }))
-
-  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
-  await ui.clock.settle()
-
-  const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
-  expect(saved.intents.find(one => one.id === '2')?.closed).toMatchObject({ as: 'cancelled', isAuto: true })
-  expect(saved.intents.find(one => one.id === '1')?.closed).toMatchObject({ as: 'replaced', replacedBy: '3', isAuto: true })
-  expect(saved.intents.find(one => one.id === '3')).toMatchObject({ ai: '草稿自動存雲端', isAuto: true, source: '草稿改成自動存雲端' })
-  expect(saved.intents.find(one => one.id === '4')).toMatchObject({ ai: '匯出 PDF 能選頁', isAuto: true })
-  expect(saved.intents.some(one => one.ai === '升級套件')).toBe(false)
-  expect(toasts.some(x => x.includes('取消 2') && x.includes('取代 1') && x.includes('加入 1 項需求'))).toBe(true)
-
-  // Claude confirms the auto entry.
-  await $.tool.call({ tool: REVISE, id: '4', confirm: true } as never)
-  expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.find(one => one.id === '4')?.isAuto).toBe(false)
-})
-
-test('the stage line shows where the session is now: edits after a failing test read as fixing', async ($, on) => {
-  engine(on)
-  on('tool.call', (_, e) => ({ result: 'ok', ...((e as { command?: string }).command === 'npm test' ? { isError: true } : {}) }) as never)
-  await seed($)
-
-  await $.tool.call({ tool: 'Read', file_path: 'a.ts' } as never)
-  await $.tool.call({ tool: 'Edit', file_path: 'a.ts', old_string: 'a', new_string: 'b' } as never)
-  await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
-  await $.tool.call({ tool: 'Edit', file_path: 'a.ts', old_string: 'b', new_string: 'c' } as never)
-
-  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  const shown = await texts(pane)
-  // The latest stage only, no trail.
-  expect(shown).toContain('現在：修正')
-  expect(shown.some(x => x.includes('›'))).toBe(false)
-  await pane.unmount()
-})
-
 test("after a turn where Claude already updated the list, the check adds nothing of the person's message twice", async ($, on) => {
   const store = engine(on)
   on('ui.toast', () => ({ value: undefined }))
@@ -1098,7 +1051,7 @@ async function seedParts($: Parameters<Parameters<typeof test>[1]>[0]) {
 
 test('several parts can be worked on at once, each showing its own activity; a subagent\'s goes to the part it was sent for', async ($, on) => {
   engine(on)
-  on('tool.call', () => ({ result: 'ok' }) as never)
+  const running = heldTools(on)
   on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'ag-1' }) as never)
   on('turn.complete', () => ({ text: 'done' }))
   await seedParts($)
@@ -1106,14 +1059,31 @@ test('several parts can be worked on at once, each showing its own activity; a s
   await $.tool.call({ tool: REVISE, id: '1a', active: true } as never)
   await $.tool.call({ tool: REVISE, id: '1b', agent: 'scan the switch code' } as never)
   await $.agent.spawn({ prompt: 'look', description: '[Opus High · FULL] scan the switch code' })
-  // The subagent reads; the main loop edits.
-  await $.tool.call({ tool: 'Read', file_path: 'Switch.swift', agentId: 'ag-1' } as never)
-  await $.tool.call({ tool: 'Edit', file_path: 'Draft.swift', old_string: 'a', new_string: 'b' } as never)
+  // The subagent reads, then the main loop edits: while each runs, its own part shows it.
+  await running(
+    () => $.tool.call({ tool: 'Read', file_path: 'Switch.swift', agentId: 'ag-1' } as never),
+    async () => {
+      const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+      expect(await texts(pane)).toContain('  ● 1b. 切換筆記本後草稿還在  現在：調查')
+      await pane.unmount()
+    },
+  )
+  await running(
+    () => $.tool.call({ tool: 'Edit', file_path: 'Draft.swift', old_string: 'a', new_string: 'b' } as never),
+    async () => {
+      const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+      const shown = await texts(pane)
+      expect(shown).toContain('  ● 1a. 關掉 app 後草稿還在  現在：實作')
+      expect(shown).toContain('  ● 1b. 切換筆記本後草稿還在  現在：思考中')
+      await pane.unmount()
+    },
+  )
 
+  // Both tools have returned: both loops are thinking now.
   let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   let shown = await texts(pane)
-  expect(shown).toContain('  ● 1a. 關掉 app 後草稿還在  現在：實作')
-  expect(shown).toContain('  ● 1b. 切換筆記本後草稿還在  現在：調查')
+  expect(shown).toContain('  ● 1a. 關掉 app 後草稿還在  現在：思考中')
+  expect(shown).toContain('  ● 1b. 切換筆記本後草稿還在  現在：思考中')
   expect(shown).toContain('  ○ 1c. 同步照常')
   // With activity on the parts, no separate stage line under the bar.
   expect(shown.some(x => x.startsWith('現在：'))).toBe(false)
@@ -1225,6 +1195,86 @@ test('a changed request carries the parts that still apply to the new one', asyn
   expect(saved.intents.filter(one => one.parent === '5' && !one.closed).length).toBe(3)
 })
 
+test('the status is live: each tool shows its stage while it runs, thinking between tools, nothing once the turn ends', async ($, on) => {
+  engine(on)
+  const running = heldTools(on, e => ({ result: 'ok', ...(e.command === 'npm test' ? { isError: true } : {}) }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: '{"onTrack": true}', usage: USAGE } }))
+  // seed()'s own tool calls go through the held tool too.
+  await running(() => seed($), async () => {})
+  const seen: string[] = []
+  const look = async () => {
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    seen.push((await texts(pane)).find(x => x.startsWith('現在：')) ?? '')
+    await pane.unmount()
+  }
+  await running(() => $.tool.call({ tool: 'Read', file_path: 'a.ts' } as never), look)
+  await running(() => $.tool.call({ tool: 'Edit', file_path: 'a.ts', old_string: 'a', new_string: 'b' } as never), look)
+  await running(() => $.tool.call({ tool: 'Bash', command: 'npm test' } as never), look)
+  // The test failed: the next edit is fixing.
+  await running(() => $.tool.call({ tool: 'Edit', file_path: 'a.ts', old_string: 'b', new_string: 'c' } as never), look)
+  expect(seen).toEqual(['現在：調查', '現在：實作', '現在：測試', '現在：修正'])
+
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  let shown = await texts(pane)
+  expect(shown).toContain('現在：思考中')
+  expect(shown.some(x => x.includes('›'))).toBe(false)
+  await pane.unmount()
+
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await texts(pane)).some(x => x.includes('現在'))).toBe(false)
+  await pane.unmount()
+})
+
+test("after a turn, the person's missed request, drop or change is recorded from their own words only", async ($, on) => {
+  const store = engine(on)
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(String((e as { text?: unknown }).text ?? e))
+    return { value: undefined }
+  })
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({
+    value: {
+      isAnswered: true,
+      text: JSON.stringify({
+        onTrack: true,
+        cancel: [{ id: '2', quote: '同步那個不用管了' }],
+        replace: [{ id: '1', quote: '草稿改成自動存雲端', summary: '草稿自動存雲端', check: '雲端看得到' }],
+        // The second quote was never said: dropped.
+        add: [
+          { quote: '匯出 PDF 要能選頁', kind: 'goal', summary: '匯出 PDF 能選頁', check: '選 2 頁匯出得 2 頁' },
+          { quote: '順便升級套件', kind: 'goal', summary: '升級套件', check: 'x' },
+        ],
+      }),
+      usage: USAGE,
+    },
+  }))
+  await seed($)
+  setMessages(() => ({
+    value: [
+      { role: 'user', text: '同步那個不用管了。草稿改成自動存雲端，還有匯出 PDF 要能選頁', toolUses: [] },
+      { role: 'assistant', text: '好', toolUses: [] },
+    ],
+  }))
+
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+
+  const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
+  expect(saved.intents.find(one => one.id === '2')?.closed).toMatchObject({ as: 'cancelled', isAuto: true })
+  expect(saved.intents.find(one => one.id === '1')?.closed).toMatchObject({ as: 'replaced', replacedBy: '3', isAuto: true })
+  expect(saved.intents.find(one => one.id === '3')).toMatchObject({ ai: '草稿自動存雲端', isAuto: true, source: '草稿改成自動存雲端' })
+  expect(saved.intents.find(one => one.id === '4')).toMatchObject({ ai: '匯出 PDF 能選頁', isAuto: true })
+  expect(saved.intents.some(one => one.ai === '升級套件')).toBe(false)
+  expect(toasts.some(x => x.includes('取消 2') && x.includes('取代 1') && x.includes('加入 1 項需求'))).toBe(true)
+
+  // Claude confirms the auto entry.
+  await $.tool.call({ tool: REVISE, id: '4', confirm: true } as never)
+  expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.find(one => one.id === '4')?.isAuto).toBe(false)
+})
+
 test('a message typed mid-turn still counts as the person\'s words after a reload, read from the transcript', async ($, on) => {
   engine(on)
   await start($)
@@ -1249,18 +1299,38 @@ test('a message typed mid-turn still counts as the person\'s words after a reloa
   expect('deny' in wrapper).toBe(true)
 })
 
-test('when a turn ends, nothing shows as happening now (except what a running subagent does)', async ($, on) => {
+test('work running in the background shows until it really ends: a background test until its notification, a subagent until it finishes', async ($, on) => {
   engine(on)
-  on('tool.call', () => ({ result: 'ok' }) as never)
+  on('tool.call', (_, e) =>
+    ((e as { run_in_background?: boolean }).run_in_background
+      ? { result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bg-7' } }
+      : { result: 'ok' }) as never,
+  )
+  on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'ag-9' }) as never)
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
   on('turn.complete', () => ({ text: 'done' }))
   on('model.complete', () => ({ value: { isAnswered: true, text: '{"onTrack": true}', usage: USAGE } }))
   await seed($)
-  await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
-  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await texts(pane)).toContain('現在：測試')
-  await pane.unmount()
+
+  await $.tool.call({ tool: 'Bash', command: 'xcodebuild test -scheme App', description: '[shell] xcodebuild unit suite', run_in_background: true } as never)
+  // Not sent for any part: the subagent shows on its own.
+  await $.agent.spawn({ prompt: 'read docs', description: '[Fable High · FULL] scan the export docs', subagentType: 'Explore' })
+  await $.tool.call({ tool: 'Grep', pattern: 'export', agentId: 'ag-9' } as never)
+  // The main turn ends; both are still running.
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  let shown = await texts(pane)
+  expect(shown).toContain('同時進行')
+  expect(shown).toContain('  背景指令「xcodebuild unit suite」：測試')
+  expect(shown).toContain('  子代理「scan the export docs」：思考中')
+  await pane.unmount()
+
+  // The subagent finishes; the background test's notification arrives.
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 's', reason: 'answer', agentId: 'ag-9' } as never)
+  await $.prompt.submit({ text: '<task-notification>\n<task-id>bg-7</task-id>\n<status>completed</status>\n</task-notification>', isMeta: true } as never)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await texts(pane)).some(x => x.includes('現在'))).toBe(false)
+  shown = await texts(pane)
+  expect(shown.some(x => x.includes('同時進行') || x.includes('xcodebuild') || x.includes('scan the export'))).toBe(false)
   await pane.unmount()
 })
