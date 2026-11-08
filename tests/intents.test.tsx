@@ -6,7 +6,7 @@ const PANE = {
   component: 'Pane',
   requestId: 'intents',
   props: {
-    title: '🎯 本次目標',
+    title: '本次目標',
     isFocused: false,
     bodyColumns: 50,
     placement: 'dock',

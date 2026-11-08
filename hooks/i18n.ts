@@ -95,7 +95,7 @@ export type Strings = {
 }
 
 const EN: Strings = {
-  title: '🎯 Goals',
+  title: 'Goals',
   command: 'Open the goals pane',
   opened: 'Goals pane opened.',
   empty: 'No goals yet.',
@@ -148,7 +148,7 @@ const EN: Strings = {
 }
 
 const ZH: Strings = {
-  title: '🎯 本次目標',
+  title: '本次目標',
   command: '打開本次目標面板',
   opened: '已打開本次目標面板。',
   empty: '還沒有目標。',
@@ -203,7 +203,7 @@ const ZH: Strings = {
 }
 
 const JA: Strings = {
-  title: '🎯 今回の目標',
+  title: '今回の目標',
   command: '目標パネルを開く',
   opened: '目標パネルを開きました。',
   empty: 'まだ目標がありません。',
