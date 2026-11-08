@@ -15,7 +15,7 @@ Also running
   Background command "unit suite": testing
 ✓ 4 done ▸
 ────────────────────────────────────────────
-2 min ago · goals Opus · drift Haiku · observer: on · 🌐 English
+2 min ago · goals Opus · drift Haiku · observer: on · 🌐 English · ◐ dark
 ```
 
 **Marks**
@@ -44,7 +44,7 @@ Also running
 
 **Now** (beside a ● part, or under the progress bar): *plan*, *investigate*, *editing*, *building*, *test*, *fix* (editing after a failed test), *review*, *thinking* (between tools), *waiting for your answer*, *waiting for your approval*. Nothing shows once the turn is over. **Also running** lists background commands and subagents until they really end.
 
-**Buttons**: ✎ write an item in your own words (yours lead) · ✕ cancel it · ⋯ the words that asked for it and its evidence · ▶ start (build the list from the conversation) · ↻ refresh the AI side · ⌫ clear the list (two presses) · ✕ close (`/intents` reopens). Footer: the drift model (Haiku, Sonnet or Opus), *observer: on/off*, 🌐 language (English, 中文, 日本語 or your own).
+**Buttons**: ✎ write an item in your own words (yours lead) · ✕ cancel it · ⋯ the words that asked for it and its evidence · ▶ start (build the list from the conversation) · ↻ refresh the AI side · ⌫ clear the list (two presses) · ✕ close (`/intents` reopens). Footer: the drift model (Haiku, Sonnet or Opus), *observer: on/off*, 🌐 language (English, 中文, 日本語 or your own), ◐ colors (auto, dark or light: shades tuned for that background; text and buttons keep your terminal's own colors).
 
 ## How it works
 

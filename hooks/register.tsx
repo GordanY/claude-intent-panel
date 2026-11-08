@@ -94,6 +94,23 @@ const baseline = atom(
 /** Whether the observer may run (the person's choice, saved for every session). */
 const isObserverOn = atom({ plugin: 'intent-tracker', key: 'isObserverOn' } as const, true)
 const OBSERVER_KEY = 'settings:observer'
+/** Which background the pane's colors are tuned for: the surface's own colors (auto), a dark one, or a light one. */
+const SCHEMES = ['auto', 'dark', 'light'] as const
+type Scheme = (typeof SCHEMES)[number]
+const SCHEME_KEY = 'settings:theme'
+const scheme = atom({ plugin: 'intent-tracker', key: 'scheme' } as const, 'auto' as Scheme)
+const asScheme = (value: unknown): Scheme => (SCHEMES.includes(value as Scheme) ? (value as Scheme) : 'auto')
+/**
+ * The pane's colors for each scheme: done, being worked on, needs a look, and
+ * danger, and the bar's fill. Auto keeps the terminal's named colors; dark and
+ * light use shades that read on that background. Only colors the mod paints
+ * change: text and buttons keep the surface's own, so nothing turns unreadable.
+ */
+const PALETTES: Record<Scheme, { done: string; now: string; warn: string; danger: string; bar: string }> = {
+  auto: { done: 'green', now: 'cyan', warn: 'yellow', danger: 'red', bar: '#4caf50' },
+  dark: { done: '#5fd77a', now: '#56c8f0', warn: '#f0c674', danger: '#ff7b72', bar: '#5fd77a' },
+  light: { done: '#1a7f37', now: '#0969da', warn: '#9a6700', danger: '#cf222e', bar: '#1a7f37' },
+}
 /** Every text the person writes in the pane, per worktree, only ever appended to: what was replaced can be found again. */
 const MINE_LOG_KEY = 'mine:'
 const MINE_LOG_MAX = 500
@@ -473,12 +490,12 @@ const RULE_SVG =
   '<rect width="2000" height="1" fill="#808080" fill-opacity="0.35"/></svg>'
 
 /** A progress bar as wide as its slot: a light track and the done share over it. */
-function progressSvg(share: number): string {
+function progressSvg(share: number, fill = PALETTES.auto.bar): string {
   const done = Math.round(Math.max(0, Math.min(1, share)) * 2000)
   return (
     '<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="6" viewBox="0 0 2000 6" preserveAspectRatio="none">' +
     '<rect width="2000" height="6" rx="3" fill="#808080" fill-opacity="0.25"/>' +
-    (done > 0 ? `<rect width="${done}" height="6" rx="3" fill="#4caf50"/>` : '') +
+    (done > 0 ? `<rect width="${done}" height="6" rx="3" fill="${fill}"/>` : '') +
     '</svg>'
   )
 }
@@ -1188,6 +1205,8 @@ async function activate($: EngineInterface): Promise<void> {
   await update($, driftModel, () => stored)
   const observing = (await $.store.get(OBSERVER_KEY)) !== false
   await update($, isObserverOn, () => observing)
+  const savedScheme = asScheme(await $.store.get(SCHEME_KEY))
+  await update($, scheme, () => savedScheme)
   await update($, lang, () => chosen)
   await $.command.register({ name: 'intents', description: strings(chosen).command })
   await sweep($).catch(() => undefined)
@@ -1217,6 +1236,8 @@ async function activate($: EngineInterface): Promise<void> {
       if (sharedModel !== (await read($, driftModel))) await update($, driftModel, () => sharedModel)
       const sharedObserving = (await $.store.get(OBSERVER_KEY)) !== false
       if (sharedObserving !== (await read($, isObserverOn))) await update($, isObserverOn, () => sharedObserving)
+      const sharedScheme = asScheme(await $.store.get(SCHEME_KEY))
+      if (sharedScheme !== (await read($, scheme))) await update($, scheme, () => sharedScheme)
     })().catch(() => undefined)
   })
 }
@@ -1782,6 +1803,8 @@ export const register: Register = on => {
     const isDoneShown = await read($, isDoneOpen)
     const checker = await read($, driftModel)
     const observing = await read($, isObserverOn)
+    const colors = await read($, scheme)
+    const pal = PALETTES[colors]
     const t = strings(chosen)
     const mainModel = modelName(await $.session.model().catch(() => t.mainSession))
     const columns = e.props.bodyColumns ?? 40
@@ -1954,6 +1977,18 @@ export const register: Register = on => {
             dimColor
             onPress={() => update($, editing, () => (isPicking ? null : 'lang'))}
           />
+          <Text dimColor>{' · '}</Text>
+          <Button
+            key="scheme"
+            label={`◐ ${t.scheme[colors]}`}
+            plain
+            dimColor
+            onPress={async () => {
+              const next = SCHEMES[(SCHEMES.indexOf(colors) + 1) % SCHEMES.length] ?? 'auto'
+              await update($, scheme, () => next)
+              await $.store.set(SCHEME_KEY, next)
+            }}
+          />
         </Box>
         {isPickingModel && (
           <Box flexDirection="row" gap={TOOLBAR_GAP} flexWrap="wrap">
@@ -2063,7 +2098,7 @@ export const register: Register = on => {
       ) : (
         <Box flexDirection="row" gap={1} alignItems="center">
           <Box flexGrow={1}>
-            <table.Svg key="progress" source={progressSvg(share)} alt={countLabel} height={6} />
+            <table.Svg key="progress" source={progressSvg(share, pal.bar)} alt={countLabel} height={6} />
           </Box>
           <Text dimColor>{countLabel}</Text>
         </Box>
@@ -2075,7 +2110,7 @@ export const register: Register = on => {
     const isActivityShown = live.some(one => one.parent && one.isActive && !one.isMet && live$[one.id])
     const isWaiting = where.now === 'ask' || where.now === 'approve'
     const stageLine = (isWaiting || !isActivityShown) && where.now && (
-      <Text bold color={isWaiting ? 'yellow' : 'cyan'}>
+      <Text bold color={isWaiting ? pal.warn : pal.now}>
         {t.nowLabel}
         {t.colon}
         {t.stage[where.now]}
@@ -2088,7 +2123,7 @@ export const register: Register = on => {
         <Text dimColor>{t.alongside}</Text>
         {running.map(([key, item]) => (
           <Box key={`bg-${key}`}>
-            <Text color="cyan" wrap="wrap">
+            <Text color={pal.now} wrap="wrap">
               {'  '}
               {key.startsWith('agent:') ? t.subagent : t.backgroundCommand}
               {chosen.code === 'zh' || chosen.code === 'ja' ? `「${item.label}」` : ` "${item.label}"`}
@@ -2107,7 +2142,7 @@ export const register: Register = on => {
 
     const driftBox = off && (
       <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
-        <Text color="yellow" wrap="wrap">
+        <Text color={pal.warn} wrap="wrap">
           ⚠️ {t.drift}
           {off.isByUser ? t.byUser : ''}
           {t.colon}
@@ -2167,7 +2202,7 @@ export const register: Register = on => {
     const cancelRow = (one: Intent) =>
       edit === `cancel-${one.id}` && (
         <Box flexDirection="row" gap={1}>
-          <Text color="red">{t.confirmCancelItem}</Text>
+          <Text color={pal.danger}>{t.confirmCancelItem}</Text>
           <Button
             key={`cancel-yes-${one.id}`}
             label={t.cancelYes}
@@ -2231,7 +2266,7 @@ export const register: Register = on => {
             {foldButton(one)}
             <Text
               bold={!one.parent && !isFinished}
-              color={isFinished ? 'green' : isWorking ? 'cyan' : one.isStale || one.isAuto ? 'yellow' : undefined}
+              color={isFinished ? pal.done : isWorking ? pal.now : one.isStale || one.isAuto ? pal.warn : undefined}
               wrap="wrap"
             >
               {indent}
@@ -2288,7 +2323,7 @@ export const register: Register = on => {
               <Box key={`done-${one.id}`} flexDirection="column">
                 <Box flexDirection="row" gap={1}>
                   {foldButton(one)}
-                  <Text color="green" wrap="wrap">
+                  <Text color={pal.done} wrap="wrap">
                     ✓ {one.id}. {one.mine || one.ai}
                     {parts.length === 0 && doneTags(one).length > 0 ? t.paren(doneTags(one).join(' · ')) : ''}
                   </Text>
@@ -2302,7 +2337,7 @@ export const register: Register = on => {
                 </Box>
                 {(opened.has(one.id) ? parts : []).map(part => (
                   <Box key={`done-part-${part.id}`}>
-                    <Text color="green" wrap="wrap">
+                    <Text color={pal.done} wrap="wrap">
                       {'  '}✓ {labelOf(list, part)}. {part.mine || part.ai}
                       {doneTags(part).length > 0 ? t.paren(doneTags(part).join(' · ')) : ''}
                     </Text>
@@ -2352,7 +2387,7 @@ export const register: Register = on => {
     const clearRow =
       edit === 'confirm-clear' ? (
         <Box flexDirection="row" gap={1}>
-          <Text color="red">{t.confirmClear}</Text>
+          <Text color={pal.danger}>{t.confirmClear}</Text>
           <Button
             key="clear-yes"
             label={t.clearYes}

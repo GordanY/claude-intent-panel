@@ -2316,3 +2316,37 @@ test('the observer flags a check no result could pair with', async ($, on) => {
   await ui.clock.settle()
   expect(judged[2]).toBe('2: DraftSyncTests 在離線時通過')
 })
+
+test('the footer offers a dark or light color scheme after the language', async ($, on) => {
+  const store = engine(on)
+  await seed($)
+  await $.tool.call({ tool: MET, id: '1', evidence: 'DraftPersistTests 3/3 通過' } as never)
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // After 🌐 language: the scheme, starting from the surface's own colors.
+  const buttons = (await pane.findAll({ type: 'Button' })).map(one => one.key)
+  expect(buttons.indexOf('scheme')).toBe(buttons.indexOf('lang') + 1)
+  const label = async () => (await pane.find({ type: 'Button', key: 'scheme' }))?.text
+  expect(await label()).toBe('◐ 自動配色')
+  await pane.press({ key: 'done-toggle' })
+  expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.props.color).toBe('green')
+  // Light: deeper shades that read on a light background.
+  await pane.press({ key: 'scheme' })
+  await pane.press({ key: 'scheme' })
+  expect(await label()).toBe('◐ 淺色')
+  expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.props.color).toBe('#1a7f37')
+  expect(store.get('settings:theme')).toBe('light')
+  await pane.unmount()
+  // The choice is kept for the next session.
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // From light: auto, then dark.
+  await pane.press({ key: 'scheme' })
+  await pane.press({ key: 'scheme' })
+  expect(store.get('settings:theme')).toBe('dark')
+  await pane.unmount()
+  await start($)
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Button', key: 'scheme' }))?.text).toBe('◐ 深色')
+  // (The done group is still open from before.)
+  expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.props.color).toBe('#5fd77a')
+  await pane.unmount()
+})

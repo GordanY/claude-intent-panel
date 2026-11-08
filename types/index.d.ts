@@ -158,6 +158,7 @@ declare module 'claude-code' {
       baseline: { purpose: Purpose; intents: Intent[]; drift: Drift | null } | null
       /** Whether the observer (a small model reading results and turns) may run; the person's choice, saved for every session. */
       isObserverOn: boolean
+      scheme: 'auto' | 'dark' | 'light'
       /** Each item as Claude last saw it (id → its content): what changed since is sent in detail, the rest in brief. */
       shownToClaude: Record<string, string>
       /** The person sent a message and Claude has not yet recorded it on the list (nor been reminded twice). */
