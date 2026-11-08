@@ -31,8 +31,14 @@ const SAVED = {
 const ui = { up: new Set<string>(), opens: 0, clock: null as unknown as ReturnType<typeof mock.clock> }
 
 /** The engine beneath the mod; `dirs` are the folders that exist. */
-function engine(on: On, initial: Record<string, unknown> = {}, dirs: string[] = [ROOT, '/repo/.claude/worktrees']) {
+function engine(
+  on: On,
+  initial: Record<string, unknown> = {},
+  dirs: string[] = [ROOT, '/repo/.claude/worktrees'],
+  lang: unknown = { code: 'zh' },
+) {
   const store = new Map<string, unknown>(Object.entries(initial))
+  if (lang !== null) store.set('settings:lang', lang)
   on('store.get', (_, e) => ({ value: store.get(e.key) }))
   on('store.set', (_, e) => {
     store.set(e.key, JSON.parse(JSON.stringify(e.value)))
@@ -350,4 +356,59 @@ test('the bottom close button closes the pane and keeps it closed until /intents
 
   await $.command.run({ command: 'intents', args: '' } as never)
   expect(ui.up.has('intents')).toBe(true)
+})
+
+test('the language defaults to English and the choice is saved and applied', async ($, on) => {
+  const store = engine(on, {}, undefined, null)
+  on('prompt.compose', () => ({ sections: [] }))
+  await seed($)
+
+  let pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 60 }, surface: 'terminal' })
+  expect((await pane.find({ type: 'Text', text: /Last update/ }))?.text).toBe('Last update: just now')
+  expect((await pane.find({ type: 'Button', key: 'refresh-ai' }))?.text).toBe('↻ Refresh AI content')
+  expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 Language: English')
+
+  await pane.press({ key: 'lang' })
+  await pane.press({ key: 'lang-ja' })
+  await pane.unmount()
+  expect(store.get('settings:lang')).toEqual({ code: 'ja' })
+
+  pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 60 }, surface: 'terminal' })
+  expect((await pane.find({ type: 'Text', text: /最終更新/ }))?.text).toBe('最終更新：たった今')
+  expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 言語：日本語')
+  await pane.press({ key: 'lang' })
+  await pane.press({ key: 'lang-custom' })
+  await pane.input({ key: 'lang-custom-input', text: 'Deutsch' })
+  await pane.unmount()
+  expect(store.get('settings:lang')).toEqual({ code: 'custom', custom: 'Deutsch' })
+
+  // A custom language: English labels, Claude told to write in it.
+  pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 60 }, surface: 'terminal' })
+  expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 Language: Deutsch')
+  await pane.unmount()
+  const composed = await $.prompt.compose({
+    model: 'claude-opus-5-5',
+    promptModel: 'claude-opus-5-5',
+    surfaces: ['terminal'],
+    tools: [],
+    outputStyle: null,
+    traits: [],
+  } as never)
+  expect(JSON.stringify(composed)).toContain('plain Deutsch sentence')
+})
+
+test('a saved language choice is read back by a new session', async ($, on) => {
+  engine(on, {}, undefined, { code: 'ja' })
+  const submitted: string[] = []
+  on('prompt.submit', (_, e) => {
+    submitted.push(e.text)
+    return { text: e.text, context: e.context }
+  })
+  await start($)
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Text', text: /まだ目標がありません/ }))).toBeDefined()
+  await pane.press({ key: 'start' })
+  await pane.unmount()
+  expect(submitted.some(t => t.startsWith('（目標パネル）') && t.includes('日本語'))).toBe(true)
 })

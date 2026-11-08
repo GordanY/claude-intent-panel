@@ -16,6 +16,8 @@ export type Purpose = { ai: string; mine: string }
 
 export type Drift = { note: string; isByUser: boolean }
 
+export type Lang = { code: 'en' | 'zh' | 'ja' | 'custom'; custom?: string }
+
 declare module 'claude-code' {
   interface PluginState {
     'intent-tracker': {
@@ -34,6 +36,8 @@ declare module 'claude-code' {
       updatedAt: number | null
       /** The clock the footer's "N 分鐘前" reads, ticked once a minute. */
       now: number
+      /** The pane's language, loaded from $.store at session start. */
+      lang: Lang
     }
   }
 }

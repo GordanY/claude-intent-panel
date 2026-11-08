@@ -2,6 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Drift, Intent, Purpose } from '../types'
+import { ago, asLang, DEFAULT_LANG, langLabel, langName, strings } from './i18n'
+import type { Lang } from './i18n'
 
 // A list belongs to a worktree (the session's project root), not to one CLI
 // process: it is saved in $.store under `wt:<root>`, so quitting the CLI and
@@ -30,26 +32,25 @@ const loadedRoot = atom({ plugin: 'intent-tracker', key: 'loadedRoot' } as const
 const isClosedByPerson = atom({ plugin: 'intent-tracker', key: 'isClosedByPerson' } as const, false)
 const updatedAt = atom({ plugin: 'intent-tracker', key: 'updatedAt' } as const, null as number | null)
 const now = atom({ plugin: 'intent-tracker', key: 'now' } as const, 0)
+/** The person's language choice: saved in $.store, shared by every worktree and session. */
+const lang = atom({ plugin: 'intent-tracker', key: 'lang' } as const, DEFAULT_LANG as Lang)
+const LANG_KEY = 'settings:lang'
 
 /** The model the drift check runs on (the session's own model does the rest). */
 const DRIFT_MODEL = 'haiku'
 
-const START_PROMPT =
-  '（目標面板）請依目前為止的對話，整理這次工作的原意和目標：' +
-  `用 ${TOOL('intent_add')} 設定一行白話的原意，和 1～5 個我真正想要的目標（每個附具體的檢查方式）；` +
-  `對話裡已經確實跑過、也通過檢查的目標，再用 ${TOOL('intent_met')} 補上依據打勾。` +
-  '只根據對話裡真的發生過的事；如果對話還看不出要做什麼，就直接問我。整理完用一兩句話告訴我。'
-
-const REFRESH_PROMPT =
-  '（目標面板）請依目前的對話，重新整理目標面板裡的 AI 內容：原意和每個目標的白話摘要、檢查方式、打勾狀態。' +
-  `先用 ${TOOL('intent_list')} 讀目前的清單，再用 ${TOOL('intent_revise')} 更新（原意用它的 purpose 欄位）；檢查其實沒有通過的目標用 reopen 取消打勾，確實通過但還沒勾的用 ${TOOL('intent_met')} 補上依據。` +
-  '不要改動我自己寫的字；我的字跟你的摘要不一致時，以我的字為準。整理完用一兩句話告訴我改了什麼。'
+const TOOLS = {
+  add: TOOL('intent_add'),
+  list: TOOL('intent_list'),
+  met: TOOL('intent_met'),
+  revise: TOOL('intent_revise'),
+}
 
 type Saved = { purpose: Purpose; intents: Intent[]; drift: Drift | null; updatedAt?: number }
 
-const INSTRUCTIONS = `# Intent pane (intent-tracker mod)
-A pane beside the chat shows the person, in plain Traditional Chinese, what the work in this worktree is for and which goals are met, so they do not get lost when the conversation turns technical. The list is kept per worktree across sessions. Keep it accurate and quiet (do not narrate these calls):
-- When the person states the task, or the task changes, call ${TOOL('intent_add')} with a one-line \`purpose\` and the goals. Each goal: \`summary\` is one plain Traditional Chinese sentence a non-programmer understands (no file names, SHAs, flags or jargon); \`check\` is the concrete step that proves it (a test that passes, a behaviour observed, a diff condition), Traditional Chinese, identifiers allowed. Goals are outcomes the person wants, not your sub-steps: usually 1-5. Do not re-add goals already on the list.
+const instructions = (language: string) => `# Intent pane (intent-tracker mod)
+A pane beside the chat shows the person, in plain ${language}, what the work in this worktree is for and which goals are met, so they do not get lost when the conversation turns technical. The list is kept per worktree across sessions. Keep it accurate and quiet (do not narrate these calls):
+- When the person states the task, or the task changes, call ${TOOL('intent_add')} with a one-line \`purpose\` and the goals. Each goal: \`summary\` is one plain ${language} sentence a non-programmer understands (no file names, SHAs, flags or jargon); \`check\` is the concrete step that proves it (a test that passes, a behaviour observed, a diff condition), in ${language}, identifiers allowed. Evidence is in ${language} too. Goals are outcomes the person wants, not your sub-steps: usually 1-5. Do not re-add goals already on the list.
 - Call ${TOOL('intent_met')} only after a goal's check has actually been run or observed and passed, with the evidence. Never on intent, partial work or an unrun check. If later work breaks a met goal, call ${TOOL('intent_revise')} with reopen: true.
 - To see the current list, call ${TOOL('intent_list')}; never call another intent tool just to read it.
 - The person may type their own words for the purpose or a goal; they reach you as context beside their prompt. Their words are the authority: when your summary or check diverges from them, revise yours to match, never the reverse.`
@@ -70,14 +71,14 @@ const toolSpecs = [
       properties: {
         purpose: {
           type: 'string',
-          description: 'One plain Traditional Chinese line: what this work is for. Omit to keep the current one.',
+          description: "One plain line in the pane's language: what this work is for. Omit to keep the current one.",
         },
         intents: {
           type: 'array',
           items: {
             type: 'object',
             properties: {
-              summary: { type: 'string', description: 'Plain Traditional Chinese sentence, no jargon.' },
+              summary: { type: 'string', description: "Plain sentence in the pane's language, no jargon." },
               check: { type: 'string', description: 'The concrete verification step that proves it.' },
             },
             required: ['summary', 'check'],
@@ -97,7 +98,7 @@ const toolSpecs = [
         id: { type: 'string', description: 'The goal id shown in the list ("1", "2", ...).' },
         evidence: {
           type: 'string',
-          description: 'Short Traditional Chinese note of what was run or observed (test name, behaviour seen).',
+          description: "Short note, in the pane's language, of what was run or observed (test name, behaviour seen).",
         },
       },
       required: ['id', 'evidence'],
@@ -111,7 +112,7 @@ const toolSpecs = [
     inputSchema: {
       type: 'object',
       properties: {
-        purpose: { type: 'string', description: 'New plain Traditional Chinese purpose line.' },
+        purpose: { type: 'string', description: "New plain purpose line in the pane's language." },
         id: { type: 'string', description: 'The goal to change; omit when changing only the purpose.' },
         summary: { type: 'string' },
         check: { type: 'string' },
@@ -163,16 +164,6 @@ function asSaved(value: unknown): Saved | null {
   }
 }
 
-/** "剛剛", "10 分鐘前", "3 小時前", "2 天前". */
-function ago(at: number, nowMs: number): string {
-  const minutes = Math.floor(Math.max(0, nowMs - at) / 60_000)
-  if (minutes < 1) return '剛剛'
-  if (minutes < 60) return `${minutes} 分鐘前`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} 小時前`
-  return `${Math.floor(hours / 24)} 天前`
-}
-
 /** "claude-opus-5-5" → "Opus 5.5"; "haiku" → "Haiku"; anything else as given. */
 function modelName(id: string): string {
   const m = id.match(/(opus|sonnet|haiku|fable)(?:-(\d+)(?:[-.](\d+))?)?/i)
@@ -193,7 +184,8 @@ async function refreshTitle($: EngineInterface, isAsked = false): Promise<void> 
   if (!isUp && !isAsked && (await read($, isClosedByPerson))) return
   const list = await read($, intents)
   const met = list.filter(one => one.isMet).length
-  const title = list.length === 0 ? '🎯 本次目標' : `🎯 本次目標 ${met}/${list.length}`
+  const t = strings(await read($, lang))
+  const title = list.length === 0 ? t.title : `${t.title} ${met}/${list.length}`
   await $.ui.open({ id: PANE, title })
 }
 
@@ -313,7 +305,7 @@ async function checkDrift($: EngineInterface): Promise<void> {
       'Work that serves any goal counts as on track: investigation, setup, verification, fixing what blocks a goal, and answering a direct question about the goals. ' +
       'Flag only work clearly unrelated to every goal and to the purpose.\n' +
       'Reply {"onTrack": true} or {"onTrack": false, "byUser": <true if the person\'s latest message itself asked for that off-list work>, ' +
-      '"note": "<one short plain Traditional Chinese sentence naming the off-list work, no jargon>"}',
+      `"note": "<one short plain sentence in ${langName(await read($, lang))} naming the off-list work, no jargon>"}`,
   })
   if (!answer.isAnswered) return
 
@@ -326,7 +318,9 @@ async function checkDrift($: EngineInterface): Promise<void> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     for (const spec of toolSpecs) await $.tool.register(spec)
-    await $.command.register({ name: 'intents', description: '打開本次目標面板' })
+    const chosen = asLang(await $.store.get(LANG_KEY))
+    await update($, lang, () => chosen)
+    await $.command.register({ name: 'intents', description: strings(chosen).command })
     await sweep($).catch(() => undefined)
     await sync($)
     // "N 分鐘前" in the footer: the pane redraws once a minute (a reload
@@ -344,7 +338,7 @@ export const register: Register = on => {
     await sync($)
     await refreshTitle($, true)
 
-    return { text: '已打開本次目標面板。' }
+    return { text: strings(await read($, lang)).opened }
   })
 
   // Closed by the person: list changes stop reopening it until they ask again.
@@ -359,7 +353,10 @@ export const register: Register = on => {
     const composed = await next(e)
 
     return {
-      sections: [...composed.sections, { id: `${P}:instructions`, text: INSTRUCTIONS, scope: 'session' as const }],
+      sections: [
+        ...composed.sections,
+        { id: `${P}:instructions`, text: instructions(langName(await read($, lang))), scope: 'session' as const },
+      ],
     }
   })
 
@@ -471,15 +468,87 @@ export const register: Register = on => {
     const met = list.filter(one => one.isMet).length
     const lastAt = await read($, updatedAt)
     const nowMs = await read($, now)
-    const mainModel = modelName(await $.session.model().catch(() => '主對話的模型'))
+    const chosen = await read($, lang)
+    const t = strings(chosen)
+    const mainModel = modelName(await $.session.model().catch(() => t.mainSession))
+
+    const choose = async (next: Lang) => {
+      await update($, lang, () => next)
+      await update($, editing, () => null)
+      await $.store.set(LANG_KEY, next)
+      await refreshTitle($)
+    }
+
+    // The language picker: one light button, opening the choices in place.
+    const languageRow =
+      edit === 'lang' || edit === 'lang-custom' ? (
+        <Box flexDirection="column">
+          <Box flexDirection="row" gap={TOOLBAR_GAP} flexWrap="wrap">
+            <Text dimColor>🌐</Text>
+            {(
+              [
+                { key: 'lang-en', label: 'English', lang: { code: 'en' } },
+                { key: 'lang-zh', label: '中文', lang: { code: 'zh' } },
+                { key: 'lang-ja', label: '日本語', lang: { code: 'ja' } },
+              ] as const
+            ).map(o => (
+              <Button key={o.key} label={o.label} plain dimColor={chosen.code !== o.lang.code} onPress={() => choose(o.lang)} />
+            ))}
+            <Button
+              key="lang-custom"
+              label={chosen.code === 'custom' ? `${t.customOption} ${langLabel(chosen)}` : t.customOption}
+              plain
+              dimColor={chosen.code !== 'custom'}
+              onPress={() => update($, editing, () => 'lang-custom')}
+            />
+            <Button key="lang-cancel" label="✕" plain dimColor onPress={() => update($, editing, () => null)} />
+          </Box>
+          {edit === 'lang-custom' && (
+            <Input
+              key="lang-custom-input"
+              placeholder={t.customPlaceholder}
+              value={chosen.code === 'custom' ? (chosen.custom ?? '') : ''}
+              submitLabel={t.save}
+              onSubmit={value => {
+                const text = value.trim()
+                void (text ? choose({ code: 'custom', custom: text }) : update($, editing, () => null))
+              }}
+            />
+          )}
+        </Box>
+      ) : (
+        <Box flexDirection="row">
+          <Button
+            key="lang"
+            label={`🌐 ${t.language}${t.colon}${langLabel(chosen)}`}
+            plain
+            dimColor
+            onPress={() => update($, editing, () => 'lang')}
+          />
+        </Box>
+      )
 
     // Metadata at the very bottom, below a divider, in light text.
     const footer = (
       <Box flexDirection="column">
         <Text dimColor>{'─'.repeat(Math.max(8, Math.min(e.props.bodyColumns ?? 24, 60)))}</Text>
-        <Text dimColor wrap="wrap">最後更新：{lastAt === null ? '—' : ago(lastAt, Math.max(nowMs, lastAt))}</Text>
-        <Text dimColor wrap="wrap">摘要・打勾：{mainModel}（主對話）</Text>
-        <Text dimColor wrap="wrap">偏題檢查：{modelName(DRIFT_MODEL)}</Text>
+        <Text dimColor wrap="wrap">
+          {t.lastUpdate}
+          {t.colon}
+          {lastAt === null ? '—' : ago(t, lastAt, Math.max(nowMs, lastAt))}
+        </Text>
+        <Text dimColor wrap="wrap">
+          {t.summaries}
+          {t.colon}
+          {mainModel}
+          {t.paren(t.mainSession)}
+        </Text>
+        <Text dimColor wrap="wrap">
+          {t.driftCheck}
+          {t.colon}
+          {modelName(DRIFT_MODEL)}
+        </Text>
+        {languageRow}
       </Box>
     )
 
@@ -497,16 +566,20 @@ export const register: Register = on => {
     const mineRow = (target: string, mine: string) =>
       mine && edit !== target ? (
         <Box flexDirection="row" gap={1}>
-          <Text wrap="wrap">你：{mine}</Text>
-          <Button key={`edit-${target}`} label="改" plain onPress={() => update($, editing, () => target)} />
+          <Text wrap="wrap">
+            {t.you}
+            {t.colon}
+            {mine}
+          </Text>
+          <Button key={`edit-${target}`} label={t.edit} plain onPress={() => update($, editing, () => target)} />
         </Box>
       ) : (
         <Input
           key={`mine-${target}`}
-          label="你："
-          placeholder="用你自己的話寫，Enter 儲存"
+          label={`${t.you}${t.colon}`}
+          placeholder={t.minePlaceholder}
           value={mine}
-          submitLabel="儲存"
+          submitLabel={t.save}
           onSubmit={saveMine(target)}
         />
       )
@@ -515,12 +588,12 @@ export const register: Register = on => {
     // wide enough for every label, icon alone where it is not.
     type Tool = { key: string; icon: string; text: string; onPress: () => unknown }
     const toolbar = (tools: readonly Tool[]) => {
-      const full = tools.reduce((sum, t) => sum + cells(`${t.icon} ${t.text}`), 0) + TOOLBAR_GAP * (tools.length - 1)
+      const full = tools.reduce((sum, one) => sum + cells(`${one.icon} ${one.text}`), 0) + TOOLBAR_GAP * (tools.length - 1)
       const isWide = (e.props.bodyColumns ?? 0) >= full
       return (
         <Box flexDirection="row" gap={TOOLBAR_GAP}>
-          {tools.map(t => (
-            <Button key={t.key} label={isWide ? `${t.icon} ${t.text}` : t.icon} plain dimColor onPress={t.onPress} />
+          {tools.map(one => (
+            <Button key={one.key} label={isWide ? `${one.icon} ${one.text}` : one.icon} plain dimColor onPress={one.onPress} />
           ))}
         </Box>
       )
@@ -529,34 +602,34 @@ export const register: Register = on => {
     const startTool: Tool = {
       key: 'start',
       icon: '▶',
-      text: '開始整理',
+      text: t.start,
       onPress: async () => {
-        await $.prompt.submit({ text: START_PROMPT })
-        $.ui.toast('已請 Claude 依目前的對話整理原意和目標')
+        await $.prompt.submit({ text: t.startPrompt(TOOLS, langName(chosen)) })
+        $.ui.toast(t.toastStart)
       },
     }
     const refreshTool: Tool = {
       key: 'refresh-ai',
       icon: '↻',
-      text: '重新整理 AI 內容',
+      text: t.refresh,
       onPress: async () => {
         // A turn of its own once the session is idle; the model may change
         // only the AI side (purpose, summaries, checks, ticks).
-        await $.prompt.submit({ text: REFRESH_PROMPT })
-        $.ui.toast('已請 Claude 重新整理 AI 內容（你寫的字不會動）')
+        await $.prompt.submit({ text: t.refreshPrompt(TOOLS, langName(chosen)) })
+        $.ui.toast(t.toastRefresh)
       },
     }
     const clearTool: Tool = {
       key: 'clear',
       icon: '⌫',
-      text: '清空清單',
+      text: t.clear,
       onPress: () => update($, editing, () => 'confirm-clear'),
     }
     // A close at the bottom too: a host's own header may cover the pane's close mark.
     const closeTool: Tool = {
       key: 'close',
       icon: '✕',
-      text: '關閉',
+      text: t.close,
       onPress: async () => {
         // The mod's own close skips its own ui.close hook, so mark it here.
         await update($, isClosedByPerson, () => true)
@@ -567,8 +640,8 @@ export const register: Register = on => {
     if (list.length === 0 && !p.ai) {
       return (
         <Box flexDirection="column" gap={1}>
-          <Text dimColor wrap="wrap">還沒有目標。開始描述這次要做的事，Claude 會在這裡整理出來。</Text>
-          <Text dimColor wrap="wrap">對話已經進行一段了？按「▶ 開始整理」，Claude 會依目前的對話整理出原意和目標。</Text>
+          <Text dimColor wrap="wrap">{t.empty1}</Text>
+          <Text dimColor wrap="wrap">{t.empty2}</Text>
           {toolbar([startTool, closeTool])}
           {footer}
         </Box>
@@ -578,10 +651,10 @@ export const register: Register = on => {
     const clearRow =
       edit === 'confirm-clear' ? (
         <Box flexDirection="row" gap={1}>
-          <Text color="red">確定清空這個 worktree 的清單？</Text>
+          <Text color="red">{t.confirmClear}</Text>
           <Button
             key="clear-yes"
-            label="清空"
+            label={t.clearYes}
             onPress={async () => {
               await update($, purpose, () => ({ ai: '', mine: '' }))
               await update($, intents, () => [])
@@ -592,7 +665,7 @@ export const register: Register = on => {
               await refreshTitle($)
             }}
           />
-          <Button key="clear-no" label="取消" onPress={() => update($, editing, () => null)} />
+          <Button key="clear-no" label={t.cancel} onPress={() => update($, editing, () => null)} />
         </Box>
       ) : (
         toolbar([refreshTool, clearTool, closeTool])
@@ -601,13 +674,17 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="column">
-          <Text bold>原意</Text>
-          <Text wrap="wrap">AI：{p.ai || '（尚未整理）'}</Text>
+          <Text bold>{t.purpose}</Text>
+          <Text wrap="wrap">
+            {t.ai}
+            {t.colon}
+            {p.ai || t.notYet}
+          </Text>
           {mineRow('purpose', p.mine)}
         </Box>
 
         <Text bold>
-          已達成 {met}/{list.length}
+          {t.met} {met}/{list.length}
         </Text>
 
         {list.map(one => (
@@ -617,7 +694,7 @@ export const register: Register = on => {
             </Text>
             {mineRow(one.id, one.mine)}
             <Text dimColor wrap="wrap">
-              {one.isMet ? `依據：${one.evidence}` : `檢查：${one.check || '（未定）'}`}
+              {one.isMet ? `${t.evidence}${t.colon}${one.evidence}` : `${t.check}${t.colon}${one.check || t.noCheck}`}
             </Text>
           </Box>
         ))}
@@ -625,12 +702,15 @@ export const register: Register = on => {
         {off && (
           <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
             <Text color="yellow" wrap="wrap">
-              ⚠️ 偏題{off.isByUser ? '（你要求的）' : ''}：{off.note}
+              ⚠️ {t.drift}
+              {off.isByUser ? t.byUser : ''}
+              {t.colon}
+              {off.note}
             </Text>
             <Box flexDirection="row" gap={1}>
               <Button
                 key="drift-add"
-                label="加入清單"
+                label={t.addToList}
                 onPress={async () => {
                   await update($, intents, l => {
                     const n = l.reduce((max, one) => Math.max(max, Number(one.id) || 0), 0) + 1
@@ -644,7 +724,7 @@ export const register: Register = on => {
               />
               <Button
                 key="drift-ignore"
-                label="忽略"
+                label={t.ignore}
                 onPress={async () => {
                   await update($, drift, () => null)
                   await save($)
