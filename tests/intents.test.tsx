@@ -483,7 +483,7 @@ test('an interactive session gets the instructions; a teammate prompt or one wit
   on('prompt.compose', () => ({ sections: [] }))
   await start($)
 
-  expect(ui.registered).toBe(4)
+  expect(ui.registered).toBe(5)
   expect(JSON.stringify(await $.prompt.compose(COMPOSE as never))).toContain('Intent pane')
   expect(JSON.stringify(await $.prompt.compose({ ...COMPOSE, traits: ['teammate'] } as never))).not.toContain('Intent pane')
   expect(JSON.stringify(await $.prompt.compose({ ...COMPOSE, surfaces: [] } as never))).not.toContain('Intent pane')
@@ -607,7 +607,7 @@ test('a desktop-app session (SDK-hosted, no surface at start) turns on when the 
   expect(ui.registered).toBe(0)
 
   await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
-  expect(ui.registered).toBe(4)
+  expect(ui.registered).toBe(5)
   await $.tool.call({ tool: ADD, purpose: '桌面版也能用', intents: [{ summary: '面板出現', check: '看得到', source: '面板出現' }] } as never)
   const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await pane.find({ type: 'Text', text: /面板出現/ }))?.text).toBe('○ 1. 面板出現')
@@ -903,23 +903,20 @@ test('a dropped request is cancelled only on the person\'s words, takes its part
   let saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
   expect(saved.intents.find(one => one.id === '1')?.closed?.by).toBe('person')
   expect(saved.intents.find(one => one.id === '2')?.closed?.isCascade).toBe(true)
-  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await texts(pane)).some(x => x.endsWith(' 0/1') && /[▓░]/.test(x))).toBe(true)
-  await pane.press({ key: 'closed-toggle' })
-  let shown = await texts(pane)
-  expect(shown).toContain('⊘ 1. 草稿要保留（已取消）')
-  expect(shown).toContain('  你：「草稿那個算了不要」')
-  // The part closed with its request is not listed on its own.
-  expect(shown.some(x => x.includes('2. 關掉 app 後還在'))).toBe(false)
-  await pane.press({ key: 'restore-1' })
+  // The pane shows the latest only: the cancelled request and its part are gone from it.
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const shown = await texts(pane)
+  expect(shown.some(x => x.endsWith(' 0/1') && /[▓░]/.test(x))).toBe(true)
+  expect(shown.some(x => x.includes('草稿要保留') || x.includes('關掉 app 後還在'))).toBe(false)
   await pane.unmount()
+  await $.tool.call({ tool: REVISE, id: '1', restore: true } as never)
 
   saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
   expect(saved.intents.every(one => !one.closed)).toBe(true)
   expect(saved.intents.find(one => one.id === '1')?.history?.map(h => h.what)).toEqual(['added', 'cancelled', 'restored'])
 })
 
-test('a changed request replaces the old one, which stays on record and links to the new', async ($, on) => {
+test('a changed request replaces the old one, which stays on record (not in the pane) and links to the new', async ($, on) => {
   const store = engine(on)
   await start($)
   await $.tool.call({ tool: ADD, intents: [{ summary: '草稿要保留', check: 'x', source: '關掉 app 後草稿要保留' }] } as never)
@@ -936,19 +933,19 @@ test('a changed request replaces the old one, which stays on record and links to
   const shown = await texts(pane)
   // The new one is open: verified afresh, not done because the old one was.
   expect(shown).toContain('○ 2. 草稿自動存雲端')
-  await pane.press({ key: 'closed-toggle' })
-  expect(await texts(pane)).toContain('↷ 1. 草稿要保留（已由 2 取代）')
+  expect(shown.some(x => x.includes('1. 草稿要保留'))).toBe(false)
   await pane.unmount()
 })
 
-test('the person cancels in the pane; ⋯ shows their words and the history', async ($, on) => {
+test('the person cancels in the pane; ⋯ shows their words, never a history', async ($, on) => {
   const store = engine(on)
   await seed($)
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await pane.press({ key: 'details-1' })
   let shown = await texts(pane)
   expect(shown).toContain('  你說：「關掉 app 後草稿要保留」')
-  expect(shown.some(x => x.endsWith('Claude · 加入：關掉 app 後草稿要保留'))).toBe(true)
+  // No history in the pane: the latest only.
+  expect(shown.some(x => x.includes('歷史') || x.includes('Claude · 加入'))).toBe(false)
   await pane.press({ key: 'cancel-2' })
   expect(await texts(pane)).toContain('取消這一項？')
   await pane.press({ key: 'cancel-yes-2' })
@@ -1005,7 +1002,7 @@ test("after a turn, the person's missed request, drop or change is recorded from
   expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.find(one => one.id === '4')?.isAuto).toBe(false)
 })
 
-test('the stage line follows the session: investigate, build, a failing test, then fixing', async ($, on) => {
+test('the stage line shows where the session is now: edits after a failing test read as fixing', async ($, on) => {
   engine(on)
   on('tool.call', (_, e) => ({ result: 'ok', ...((e as { command?: string }).command === 'npm test' ? { isError: true } : {}) }) as never)
   await seed($)
@@ -1017,8 +1014,9 @@ test('the stage line follows the session: investigate, build, a failing test, th
 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const shown = await texts(pane)
-  expect(shown).toContain('調查 › 實作 › 測試 › ')
+  // The latest stage only, no trail.
   expect(shown).toContain('修正')
+  expect(shown.some(x => x.includes('›') || x === '調查' || x === '實作')).toBe(false)
   await pane.unmount()
 })
 
@@ -1043,4 +1041,114 @@ test("after a turn where Claude already updated the list, the check adds nothing
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
   await ui.clock.settle()
   expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.length).toBe(2)
+})
+
+const PHASE = 'mcp__intent-tracker__intent_phase'
+
+test('a request planned in phases shows each phase (done, current, later) with its parts, and the current stage under the current one', async ($, on) => {
+  engine(on)
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(String((e as { text?: unknown }).text ?? e))
+    return { value: undefined }
+  })
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  await start($)
+  await $.tool.call({
+    tool: ADD,
+    purpose: '修好草稿',
+    intents: [
+      { summary: '草稿不再消失', check: '整體', source: '修好草稿消失的問題', phases: ['確認做法', '做出修正', '驗證沒弄壞別的'] },
+      { summary: '關掉 app 後草稿還在', check: 'DraftPersistTests', parent: '+1', phase: '2' },
+      { summary: '切換筆記本後草稿還在', check: 'SwitchTests', parent: '+1', phase: '2' },
+      { summary: '同步照常', check: 'SyncTests', parent: '+1', phase: '3' },
+    ],
+  } as never)
+  // A breakdown made with its request is no news: no notice.
+  expect(toasts.length).toBe(0)
+  // The first phase has no parts: Claude marks it done.
+  await $.tool.call({ tool: PHASE, request: '1', id: '1', done: true } as never)
+  await $.tool.call({ tool: MET, id: '2', evidence: '3/3' } as never)
+  await $.tool.call({ tool: 'Edit', file_path: 'a.ts', old_string: 'a', new_string: 'b' } as never)
+
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  let shown = await texts(pane)
+  expect(shown).toContain('  ✓ 階段 1 · 確認做法')
+  expect(shown).toContain('  ● 階段 2 · 做出修正 1/2')
+  expect(shown).toContain('      實作')
+  expect(shown).toContain('    ✓ 2. 關掉 app 後草稿還在')
+  expect(shown).toContain('    ○ 3. 切換筆記本後草稿還在')
+  expect(shown).toContain('  ○ 階段 3 · 驗證沒弄壞別的 0/1')
+  expect(shown.some(x => x.endsWith(' 1/3') && /[▓░]/.test(x))).toBe(true)
+  await pane.unmount()
+
+  // The plan changes: a part is added later, a phase renamed and moved, another cancelled.
+  await $.tool.call({ tool: ADD, intents: [{ summary: '當機後草稿還在', check: 'CrashTests', parent: '1', phase: 'P2' }] } as never)
+  await $.tool.call({ tool: PHASE, request: '1', add: ['效能確認'] } as never)
+  await $.tool.call({ tool: PHASE, request: '1', id: 'P3', title: '回歸驗證', position: 2 } as never)
+  await $.tool.call({ tool: PHASE, request: '1', id: 'P4', cancel: '不需要' } as never)
+  await $.tool.call({ tool: REVISE, id: '4', phase: 'P2' } as never)
+  expect(toasts).toContain('Claude 新增了分項 5')
+  expect(toasts).toContain('Claude 調整了需求 1 的階段')
+  expect(toasts).toContain('Claude 移動了分項 4')
+
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  shown = await texts(pane)
+  expect(shown).toContain('  ✓ 階段 1 · 確認做法')
+  // P3 moved to position 2; empty now that its part moved, it is current (not marked done).
+  expect(shown).toContain('  ● 階段 2 · 回歸驗證')
+  expect(shown).toContain('  ○ 階段 3 · 做出修正 1/4')
+  expect(shown.some(x => x.includes('效能確認'))).toBe(false)
+  await pane.unmount()
+})
+
+test('a phase cannot be ticked by hand while it has parts, and a part needs a live phase of its own request', async ($, on) => {
+  engine(on)
+  await start($)
+  await $.tool.call({
+    tool: ADD,
+    intents: [
+      { summary: '草稿要保留', check: 'x', source: '關掉 app 後草稿要保留', phases: ['做', '驗'] },
+      { summary: '關掉還在', check: 'y', parent: '+1', phase: '1' },
+    ],
+  } as never)
+  const done = await $.tool.call({ tool: PHASE, request: '1', id: 'P1', done: true } as never)
+  expect('deny' in done).toBe(true)
+  const missing = await $.tool.call({ tool: ADD, intents: [{ summary: 'z', check: 'z', parent: '1', phase: '9' }] } as never)
+  expect('deny' in missing).toBe(true)
+})
+
+test("the person's dialog answers and the messages they type mid-turn count as their own words", async ($, on) => {
+  engine(on)
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  await start($)
+  setMessages(() => ({
+    value: [
+      {
+        role: 'assistant',
+        text: '',
+        toolUses: [
+          {
+            tool_use_id: 'q',
+            tool: 'AskUserQuestion',
+            input: {},
+            text: 'Your questions have been answered: "要怎麼呈現？"="規劃階段＋分項歸屬 (建議)". You can now continue with these answers in mind.',
+          },
+        ],
+      },
+    ],
+  }))
+  // The question Claude wrote is not the person's word; their pick is.
+  const question = await $.tool.call({ tool: ADD, intents: [{ summary: 'a', check: 'a', source: '要怎麼呈現' }] } as never)
+  expect('deny' in question).toBe(true)
+  const answer = await $.tool.call({ tool: ADD, intents: [{ summary: 'b', check: 'b', source: '規劃階段＋分項歸屬' }] } as never)
+  expect('deny' in answer).toBe(false)
+
+  // Typed over a running turn: never in the conversation's prompts, still theirs.
+  await $.prompt.submit({ text: 'i regret, please dont leave any history in the pane', turnId: 't-running' } as never)
+  const midTurn = await $.tool.call({
+    tool: ADD,
+    intents: [{ summary: 'c', check: 'c', source: 'please dont leave any history in the pane' }],
+  } as never)
+  expect('deny' in midTurn).toBe(false)
 })

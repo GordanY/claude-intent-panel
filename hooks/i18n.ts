@@ -101,6 +101,9 @@ export type Strings = {
   autoReplaced: (ids: readonly string[]) => string
   autoAdded: (n: number) => string
   limits: string
+  phase: string
+  partsChanged: (what: 'added' | 'edited' | 'cancelled' | 'moved' | 'restored', ids: readonly string[]) => string
+  phasesChanged: (request: string) => string
   holding: string
   brokenLabel: string
   confirmCancelItem: string
@@ -175,6 +178,10 @@ const EN: Strings = {
   autoReplaced: ids => `replaced ${ids.join(', ')}`,
   autoAdded: n => `added ${n} request${n === 1 ? '' : 's'}`,
   limits: 'Limits',
+  phase: 'Phase',
+  partsChanged: (what, ids) =>
+    `Claude ${{ added: 'added', edited: 'edited', cancelled: 'cancelled', moved: 'moved', restored: 'restored' }[what]} part ${ids.join(', ')}`,
+  phasesChanged: request => `Claude updated the phases of request ${request}`,
   holding: 'holding',
   brokenLabel: 'Broken',
   confirmCancelItem: 'Cancel this item?',
@@ -265,6 +272,10 @@ const ZH: Strings = {
   autoReplaced: ids => `取代 ${ids.join('、')}`,
   autoAdded: n => `加入 ${n} 項需求`,
   limits: '限制',
+  phase: '階段',
+  partsChanged: (what, ids) =>
+    `Claude ${{ added: '新增', edited: '修改', cancelled: '取消', moved: '移動', restored: '還原' }[what]}了分項 ${ids.join('、')}`,
+  phasesChanged: request => `Claude 調整了需求 ${request} 的階段`,
   holding: '守住中',
   brokenLabel: '被破壞',
   confirmCancelItem: '取消這一項？',
@@ -357,6 +368,10 @@ const JA: Strings = {
   autoReplaced: ids => `${ids.join('、')} を置き換え`,
   autoAdded: n => `依頼を ${n} 件追加`,
   limits: '制約',
+  phase: 'フェーズ',
+  partsChanged: (what, ids) =>
+    `Claude が分項 ${ids.join('、')} を${{ added: '追加', edited: '編集', cancelled: '取り消し', moved: '移動', restored: '復元' }[what]}しました`,
+  phasesChanged: request => `Claude が依頼 ${request} のフェーズを更新しました`,
   holding: '維持中',
   brokenLabel: '破られた',
   confirmCancelItem: 'この項目を取り消しますか？',

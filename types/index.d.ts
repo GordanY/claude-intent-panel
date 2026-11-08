@@ -12,6 +12,7 @@ export type HistoryWhat =
   | 'restored'
   | 'broken'
   | 'holding'
+  | 'moved'
 
 export type HistoryEntry = { at: number; by: Actor; what: HistoryWhat; note?: string }
 
@@ -30,6 +31,16 @@ export type Closed = {
 
 /** A limit a result showed broken. */
 export type Broken = { evidence: string; at: number; isAuto?: boolean }
+
+/** A planned stage of a request, in order; its parts name it. */
+export type Phase = {
+  /** Stable id the tools use: "P1", "P2", ... (the pane numbers phases by position). */
+  id: string
+  title: string
+  /** A phase with no parts is marked done by hand; one with parts is done when they all are. */
+  isDone?: boolean
+  closed?: Closed
+}
 
 export type Intent = {
   /** Short stable id the model refers to: "1", "2", ... */
@@ -60,6 +71,10 @@ export type Intent = {
   closed?: Closed
   broken?: Broken
   history?: HistoryEntry[]
+  /** A request's planned phases, in order. */
+  phases?: Phase[]
+  /** A part: the id of the phase of its request it falls in. */
+  phase?: string
 }
 
 /** Where the work is now: plan, investigate, build, test, fix (after a failed test), review. */
@@ -99,10 +114,10 @@ declare module 'claude-code' {
       isActive: boolean
       /** Where the work is now, from the session's own tool calls (this session only). */
       stage: Shaped<Stage>
+      /** What the person typed in this session (prompts, mid-turn messages, dialog answers), newest last. */
+      heardSaid: { text: string; at: number }[]
       /** The item whose details (source, history) are shown; one at a time. */
       shownDetails: string | null
-      /** The cancelled and replaced items are expanded in the pane. */
-      isClosedOpen: boolean
       /** The finished goals are expanded in the pane. */
       isDoneOpen: boolean
     }
