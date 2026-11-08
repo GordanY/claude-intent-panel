@@ -277,3 +277,18 @@ test('an empty pane offers a start button that asks Claude to build the list fro
   expect(await filled.find({ type: 'Button', key: 'start' })).toBeUndefined()
   await filled.unmount()
 })
+
+test('the bottom toolbar shows icon + text when wide and icon alone when narrow', async ($, on) => {
+  engine(on)
+  await seed($)
+
+  const wide = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await wide.find({ type: 'Button', key: 'refresh-ai' }))?.text).toBe('↻ 重新整理 AI 內容')
+  expect((await wide.find({ type: 'Button', key: 'clear' }))?.text).toBe('✕ 清空清單')
+  await wide.unmount()
+
+  const narrow = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 20 }, surface: 'terminal' })
+  expect((await narrow.find({ type: 'Button', key: 'refresh-ai' }))?.text).toBe('↻')
+  expect((await narrow.find({ type: 'Button', key: 'clear' }))?.text).toBe('✕')
+  await narrow.unmount()
+})

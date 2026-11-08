@@ -126,6 +126,15 @@ function listText(p: Purpose, list: readonly Intent[]): string {
   return lines.join('\n')
 }
 
+const TOOLBAR_GAP = 2
+
+/** Terminal cells a label takes: East Asian wide characters count two. */
+function cells(text: string): number {
+  let n = 0
+  for (const ch of text) n += /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/.test(ch) ? 2 : 1
+  return n
+}
+
 function str(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
@@ -435,21 +444,54 @@ export const register: Register = on => {
         />
       )
 
+    // Bottom toolbar: light, chrome-free buttons; icon + text where the pane is
+    // wide enough for every label, icon alone where it is not.
+    type Tool = { key: string; icon: string; text: string; onPress: () => unknown }
+    const toolbar = (tools: readonly Tool[]) => {
+      const full = tools.reduce((sum, t) => sum + cells(`${t.icon} ${t.text}`), 0) + TOOLBAR_GAP * (tools.length - 1)
+      const isWide = (e.props.bodyColumns ?? 0) >= full
+      return (
+        <Box flexDirection="row" gap={TOOLBAR_GAP}>
+          {tools.map(t => (
+            <Button key={t.key} label={isWide ? `${t.icon} ${t.text}` : t.icon} plain dimColor onPress={t.onPress} />
+          ))}
+        </Box>
+      )
+    }
+
+    const startTool: Tool = {
+      key: 'start',
+      icon: '▶',
+      text: '開始整理',
+      onPress: async () => {
+        await $.prompt.submit({ text: START_PROMPT })
+        $.ui.toast('已請 Claude 依目前的對話整理原意和目標')
+      },
+    }
+    const refreshTool: Tool = {
+      key: 'refresh-ai',
+      icon: '↻',
+      text: '重新整理 AI 內容',
+      onPress: async () => {
+        // A turn of its own once the session is idle; the model may change
+        // only the AI side (purpose, summaries, checks, ticks).
+        await $.prompt.submit({ text: REFRESH_PROMPT })
+        $.ui.toast('已請 Claude 重新整理 AI 內容（你寫的字不會動）')
+      },
+    }
+    const clearTool: Tool = {
+      key: 'clear',
+      icon: '✕',
+      text: '清空清單',
+      onPress: () => update($, editing, () => 'confirm-clear'),
+    }
+
     if (list.length === 0 && !p.ai) {
       return (
         <Box flexDirection="column" gap={1}>
           <Text dimColor wrap="wrap">還沒有目標。開始描述這次要做的事，Claude 會在這裡整理出來。</Text>
-          <Text dimColor wrap="wrap">對話已經進行一段了？按「開始整理」，Claude 會依目前的對話整理出原意和目標。</Text>
-          <Box flexDirection="row">
-            <Button
-              key="start"
-              label="開始整理"
-              onPress={async () => {
-                await $.prompt.submit({ text: START_PROMPT })
-                $.ui.toast('已請 Claude 依目前的對話整理原意和目標')
-              }}
-            />
-          </Box>
+          <Text dimColor wrap="wrap">對話已經進行一段了？按「▶ 開始整理」，Claude 會依目前的對話整理出原意和目標。</Text>
+          {toolbar([startTool])}
         </Box>
       )
     }
@@ -474,20 +516,7 @@ export const register: Register = on => {
           <Button key="clear-no" label="取消" onPress={() => update($, editing, () => null)} />
         </Box>
       ) : (
-        <Box flexDirection="row" gap={2}>
-          <Button
-            key="refresh-ai"
-            label="重新整理 AI 內容"
-            plain
-            onPress={async () => {
-              // A turn of its own once the session is idle; the model may change
-              // only the AI side (purpose, summaries, checks, ticks).
-              await $.prompt.submit({ text: REFRESH_PROMPT })
-              $.ui.toast('已請 Claude 重新整理 AI 內容（你寫的字不會動）')
-            }}
-          />
-          <Button key="clear" label="清空清單" plain dimColor onPress={() => update($, editing, () => 'confirm-clear')} />
-        </Box>
+        toolbar([refreshTool, clearTool])
       )
 
     return (
