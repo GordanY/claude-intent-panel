@@ -457,7 +457,7 @@ test('the language defaults to English and the choice is saved and applied', asy
     outputStyle: null,
     traits: [],
   } as never)
-  expect(JSON.stringify(composed)).toContain('plain Deutsch sentence')
+  expect(JSON.stringify(composed)).toContain('write all pane text in Deutsch')
 })
 
 test('a saved language choice is read back by a new session', async ($, on) => {
@@ -1845,4 +1845,42 @@ test("a cut name never splits an emoji, and the person's words still count after
   expect(line).toContain('…')
   expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(line)).toBe(false)
   await pane.unmount()
+})
+
+test('beside a prompt, the list rides in brief (finished requests on one line) and only what changed rides in full', async ($, on) => {
+  engine(on)
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  await seedParts($)
+  ui.messages = [...ui.messages, { role: 'user', text: '桌面版也要能用', toolUses: [] }]
+  await $.tool.call({ tool: ADD, intents: [{ summary: '桌面版可用', check: '桌面版打開看得到', source: '桌面版也要能用' }] } as never)
+  await $.tool.call({ tool: MET, id: '2', evidence: '桌面版看得到' } as never)
+  // The person writes their own words on 1b in the pane: one item changed.
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'edit-p2' })
+  await pane.input({ key: 'mine-p2', text: '換筆記本也不能掉' })
+  await pane.unmount()
+
+  const sent = await $.prompt.submit({ text: '繼續' })
+  const block = ('context' in sent ? (sent.context ?? []) : []).find(c => c.includes('The intent pane for this worktree')) ?? ''
+  expect(block).toContain('Done: 2')
+  expect(block).toContain('  1b. [open] 切換筆記本後草稿還在')
+  // In full: only the changed part (with the person's words), not the others' checks or evidence.
+  expect(block).toContain("Changed since you last saw it:\np2. [part 1b of 1 · open] 切換筆記本後草稿還在 | person's words: 換筆記本也不能掉")
+  expect(block.includes('桌面版打開看得到')).toBe(false)
+  expect(block.includes('DraftPersistTests')).toBe(false)
+})
+
+test('a result note lists the parts being worked on first, at most eight, with a count of the rest', async ($, on) => {
+  engine(on)
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  await start($)
+  const parts = Array.from({ length: 11 }, (_, n) => ({ summary: `分項 ${n + 1}`, check: `檢查 ${n + 1}`, parent: '+1' }))
+  await $.tool.call({ tool: ADD, intents: [{ summary: '草稿要保留', check: 'x', source: '關掉 app 後草稿要保留' }, ...parts] } as never)
+  await $.tool.call({ tool: REVISE, id: '1k', active: true } as never)
+  const done = await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
+  const note = ('context' in done ? (done.context ?? []) : []).find(c => c.includes('A result arrived')) ?? ''
+  const lines = note.split('\n').filter(x => /^1[a-k]\./.test(x))
+  expect(lines.length).toBe(8)
+  expect(lines[0]).toBe('1k. [active] 分項 11 | check: 檢查 11')
+  expect(note).toContain('(+3 more open: intent_list)')
 })

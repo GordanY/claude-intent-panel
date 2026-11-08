@@ -11,6 +11,7 @@ import {
   endsWithQuestion,
   entry,
   idKey,
+  itemLines,
   labelOf,
   movePart,
   isDone,
@@ -25,6 +26,7 @@ import {
   midTurnTexts,
   partsOf,
   personTexts,
+  relevantOpen,
   resolveId,
   same,
   sameWords,
@@ -88,6 +90,18 @@ const isObserverOn = atom({ plugin: 'intent-tracker', key: 'isObserverOn' } as c
 const OBSERVER_KEY = 'settings:observer'
 /** Where the person's words are kept per worktree, beside its list, so they still count after a restart. */
 const HEARD_KEY = 'heard:'
+
+/** Each item as Claude last saw it: only what changed since is sent in detail. */
+const shownToClaude = atom({ plugin: 'intent-tracker', key: 'shownToClaude' } as const, {} as Record<string, string>)
+/** At most this many changed items are sent in full beside a prompt. */
+const CHANGED_SHOWN = 10
+
+/** The brief list, as the answer to a change: Claude has now seen the list as it stands. */
+async function briefFor($: EngineInterface): Promise<string> {
+  const list = await read($, intents)
+  await update($, shownToClaude, () => Object.fromEntries(list.map(one => [one.id, JSON.stringify(one)])))
+  return briefText(await read($, purpose), list)
+}
 
 /** The person's latest message is not on the list yet: Claude is reminded once more if it starts working first. */
 const pendingRecord = atom({ plugin: 'intent-tracker', key: 'pendingRecord' } as const, false)
@@ -303,59 +317,44 @@ const TOOLS = {
 type Saved = { purpose: Purpose; intents: Intent[]; drift: Drift | null; updatedAt?: number }
 
 const instructions = (language: string) => `# Intent pane (intent-tracker mod)
-A pane beside the chat shows the person, in plain ${language}, what they asked for in this worktree and how far it has got, so they do not get lost when the conversation turns technical. The list is kept per worktree across sessions. Keep it accurate and quiet (do not narrate these calls).
-What the list holds, in two layers:
-- REQUESTS: only what the person asked for, never your own ideas or technical tasks. A goal is an outcome they want; a limit is something that must not be touched or broken WHILE the work is done ("don't touch sync", "keep the API the same"); a limit is never ticked, it holds or is broken. A request phrased in the negative about the result itself ("don't show X", "stop doing Y") is a goal, not a limit: it is done once the change is made. Each request carries \`source\`: the person's own words that asked for it, quoted exactly from their message (or their pane text); the tool refuses words the person never said. Work you suggest joins only once they say yes; then quote their yes.
-- PARTS: break each goal request into the parts the person would recognise as pieces of what they asked: plain outcomes they can follow ("drafts survive closing the app", "sync still works"), never technical steps ("edit NoteStore.swift", "add a test"). Add them with \`parent\`: the request's id. A single request usually has several parts; progress counts parts, and a request is done when all its parts are. Revise the breakdown as you learn more (add parts, cancel ones that no longer apply).
-- FOLLOW-UPS: a small follow-up that refines an existing request (a tweak to the same feature, "also make X…", "now make it Y") goes under that request as a part with its own \`source\` (the person's words), not as a new request; the request opens again until it is done. Only something that stands on its own is a new request.
-- RECORD FIRST: when the person's message asks for something, record it before you start the work, so they see it open; never only after it is done.
-- ORDER AND FOCUS: keep parts in the order they will be done (intent_revise position). Mark the parts being worked on now with ${TOOL('intent_revise')} active: true (any number at once; ticking a part ends it). When you send a subagent for a part, also give agent: "<words from that subagent's description>" so its activity shows on that part. Parts are yours to add, edit, reorder or cancel without asking; the person gets one notice per turn.
-- SHAPE BY KIND OF WORK (parts are outcomes the person can follow, never steps): a bug → "it no longer happens" + "nothing else broke"; a new feature → each behaviour the person will see; a refactor → "it behaves the same" (a goal with a regression check); a question or investigation → "you have your answer" (ticked when you have answered it with evidence); docs or config → "the page/setting says X"; a release → each irreversible outcome in order ("the build is on TestFlight").
-- RE-PLAN: when a part is marked STALE (the work shows it may no longer apply), or the root cause or approach changes, re-plan at once: edit, cancel or add parts so the list matches what is now true.
-Adding: when the person states the task or adds to it, call ${TOOL('intent_add')} with a one-line \`purpose\` and the items. \`summary\`: one plain ${language} sentence a non-programmer understands (no file names, SHAs, flags or jargon); \`check\`: the concrete step that proves it (for a limit: how to see it still holds), identifiers allowed. Everything in ${language}. Never re-add an item already listed.
-Ticking: ${TOOL('intent_met')} only after a goal's (or part's) check actually ran and passed, with the evidence; never on intent, partial work or an unrun check. If later work breaks a met one, ${TOOL('intent_revise')} reopen: true. A limit a result shows broken: ${TOOL('intent_revise')} broken: "<evidence>"; once it holds again, holding: true.
-Changes of mind: when the person drops a request, ${TOOL('intent_revise')} cancel: "<their words>" (its parts close with it). When they change what they want, add the new request with \`replaces\`: "<old id>" and the new source; the old one stays on record as replaced, and a changed goal is verified afresh. A wording-only tweak: ${TOOL('intent_revise')} summary/check.
-Keep the pane live: results that run a check (a test or build, a subagent's report, a background task's notification) carry an <intent-pane> note; act on it in the same step, before you reply or move on; ignore it when it does not apply.
-An observer (a small model) reads each result and each turn. It ticks a goal or part the output shows passing (counted at once, shown as "seen in output"), marks a limit broken, and flags a part STALE when the work shows it no longer applies (re-plan it). At the end of a turn it may also record a request, a drop or a change of mind you missed, from the person's exact words; those show as "(auto, unconfirmed)": confirm with ${TOOL('intent_revise')} confirm: true, or undo (restore: true / cancel). It never unticks; reopen yourself when a later result breaks a met one.
-To see the list, call ${TOOL('intent_list')}; never call another intent tool just to read it.
-The person's own pane words are the authority: when your summary or check diverges from them, revise yours to match, never the reverse.`
+A pane shows the person, in plain ${language}, what they asked for in this worktree and how far it has got. Keep it accurate and quiet (never narrate these calls); write all pane text in ${language}, no jargon in summaries.
+- REQUESTS: only what the person asked for, each with \`source\` = their exact words (verified; never your ideas or technical steps; your suggestion joins only after their yes). Goal = an outcome. Limit = something not to touch or break during the work ("don't touch sync"): never ticked, it holds or breaks. A negative request about the result ("don't show X") is a goal.
+- PARTS (\`parent\`): break each goal into plain outcomes the person would recognise, never steps. Bug: "no longer happens" + "nothing else broke"; feature: each visible behaviour; refactor: "behaves the same"; question: "you have your answer"; release: each irreversible outcome. A small follow-up refining a request is a part with its own \`source\`. Keep parts in order (\`position\`); mark the ones being worked on \`active: true\` (any number); give \`agent: "<words of its description>"\` when a subagent works on one. Change parts freely; the person gets a notice.
+- RECORD FIRST: when a message asks for something, record it before starting the work. A question is not a request.
+- TICK with ${TOOL('intent_met')} only after the check really ran and passed, with evidence; \`reopen\` if later broken; a limit: \`broken\` / \`holding\`.
+- CHANGES OF MIND: dropped → ${TOOL('intent_revise')} \`cancel\` with their words; changed → a new request with \`replaces\`. A STALE part, or a changed approach: re-plan at once.
+- Results carry an <intent-pane> note: act on it in that step when it applies.
+- An observer may tick from output ("seen in output"), flag STALE, or add a missed request, drop or change "(auto, unconfirmed)": confirm with \`confirm: true\` or undo.
+- Read only with ${TOOL('intent_list')}. The person's own pane words win over yours.`
 
 const toolSpecs = [
   {
     name: 'intent_list',
-    description: "Read the intent pane's current purpose and goals (ids, status, checks, the person's own words). Changes nothing.",
+    description: "Read the pane's list in full (ids, labels, states, checks, evidence, the person's words). Changes nothing.",
     inputSchema: { type: 'object', properties: {} },
     isDeferred: false,
   },
   {
     name: 'intent_add',
-    description:
-      "Add the person's requests (quoting their words) or the parts of a request to the intent pane, and optionally set the purpose. Use when the person states a task, adds to it or changes it.",
+    description: "Add the person's requests (quoting them) or parts of a request; optionally set the purpose.",
     inputSchema: {
       type: 'object',
       properties: {
-        purpose: {
-          type: 'string',
-          description: "One plain line in the pane's language: what this work is for. Omit to keep the current one.",
-        },
+        purpose: { type: 'string', description: 'One plain line: what this work is for.' },
         intents: {
           type: 'array',
           items: {
             type: 'object',
             properties: {
-              summary: { type: 'string', description: "Plain sentence in the pane's language, no jargon." },
-              check: { type: 'string', description: 'The concrete verification step that proves it (a limit: that it still holds).' },
-              kind: { type: 'string', enum: ['goal', 'limit'], description: 'A request only: goal (default) or limit.' },
+              summary: { type: 'string', description: 'One plain sentence, no jargon.' },
+              check: { type: 'string', description: 'The concrete step that proves it (a limit: that it holds).' },
+              kind: { type: 'string', enum: ['goal', 'limit'], description: 'Requests only; default goal.' },
               source: {
                 type: 'string',
-                description:
-                  "The person's own words that asked for it, quoted exactly from their message: required for a request; for a part, only when it is the person's follow-up to that request (leave it out for your own breakdown).",
+                description: "The person's exact words: required for a request; for a part only when it is their follow-up.",
               },
-              parent: { type: 'string', description: 'A part: the id of the goal request it is a piece of ("+N": the Nth item of this call).' },
-              replaces: {
-                type: 'string',
-                description: 'A request that replaces an earlier one because the person changed what they want: that id.',
-              },
+              parent: { type: 'string', description: 'A part: its request id ("+N" = the Nth item of this call).' },
+              replaces: { type: 'string', description: 'A request replacing an earlier one the person changed: that id.' },
             },
             required: ['summary', 'check'],
           },
@@ -367,15 +366,12 @@ const toolSpecs = [
   },
   {
     name: 'intent_met',
-    description: "Tick a goal or part in the intent pane after its check actually ran and passed (a request with parts is ticked through its parts).",
+    description: 'Tick a goal or part after its check really ran and passed (a request with parts ticks through them).',
     inputSchema: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: 'The goal or part, by id or label ("1b").' },
-        evidence: {
-          type: 'string',
-          description: "Short note, in the pane's language, of what was run or observed (test name, behaviour seen).",
-        },
+        id: { type: 'string', description: 'Id or label ("1b").' },
+        evidence: { type: 'string', description: 'What was run or seen, briefly.' },
       },
       required: ['id', 'evidence'],
     },
@@ -383,28 +379,23 @@ const toolSpecs = [
   },
   {
     name: 'intent_revise',
-    description:
-      "Change the purpose line or an item: its wording, reopen a met one, cancel a request the person dropped (their words) or a part that no longer applies, restore a closed one, mark a limit broken or holding, or confirm an auto entry. Never touches the person's own words.",
+    description: "Change the purpose or an item. Never touches the person's own words.",
     inputSchema: {
       type: 'object',
       properties: {
-        purpose: { type: 'string', description: "New plain purpose line in the pane's language." },
-        id: { type: 'string', description: 'The item to change, by id or label ("1b"); omit when changing only the purpose.' },
+        purpose: { type: 'string' },
+        id: { type: 'string', description: 'Id or label ("1b").' },
         summary: { type: 'string' },
         check: { type: 'string' },
-        reopen: { type: 'boolean', description: 'A met goal or part whose check no longer holds.' },
-        cancel: {
-          type: 'string',
-          description:
-            "Close it. A request: the person's own words dropping it, quoted exactly (its parts close with it). A part: why it no longer applies.",
-        },
-        restore: { type: 'boolean', description: 'Bring back a cancelled or replaced item (with the parts that closed with it).' },
-        broken: { type: 'string', description: 'A limit: the evidence that it was broken.' },
-        holding: { type: 'boolean', description: 'A limit that holds again.' },
-        confirm: { type: 'boolean', description: 'Confirm an auto (unconfirmed) cancel, replace, broken or added entry.' },
-        active: { type: 'boolean', description: 'A part: being worked on now (true) or not (false). Any number may be active.' },
-        agent: { type: 'string', description: "A part: words from the description of the subagent sent for it (its activity shows on the part)." },
-        position: { type: 'number', description: "A part: move it to this 1-based place among its request's parts." },
+        reopen: { type: 'boolean', description: 'A met one whose check no longer holds.' },
+        cancel: { type: 'string', description: "Close it. A request: the person's exact words dropping it. A part: why." },
+        restore: { type: 'boolean', description: 'Bring back a cancelled or replaced item.' },
+        broken: { type: 'string', description: 'A limit: the evidence it broke.' },
+        holding: { type: 'boolean', description: 'A limit holds again.' },
+        confirm: { type: 'boolean', description: 'Confirm an auto (unconfirmed) entry.' },
+        active: { type: 'boolean', description: 'A part: being worked on now, or not.' },
+        agent: { type: 'string', description: 'A part: words of the description of the subagent working on it.' },
+        position: { type: 'number', description: "A part: its 1-based place among its request's parts." },
       },
     },
     isDeferred: false,
@@ -436,23 +427,21 @@ function isResult(e: Record<string, unknown>): boolean {
   return e.tool === 'Bash' && typeof e.command === 'string' && VERIFY_COMMAND.test(e.command)
 }
 
-/** The note beside a result: what is still open, and what to do if the result settles one. */
+/** How many open items a result note lists (the parts being worked on first). */
+const NOTE_OPEN_MAX = 8
+
+/** The note beside a result: the open items most likely settled by it, and what to do if one is. */
 function resultNote(list: readonly Intent[]): string | null {
-  const open = units(list).filter(one => !one.isMet)
-  const limits = list.filter(one => isLive(one) && kindOf(one) === 'limit')
-  if (open.length === 0 && limits.length === 0) return null
-  const lines = ['<intent-pane>A result just arrived. If it runs one of these checks, update the pane now, before going on:']
-  for (const one of open) {
-    const label = labelOf(list, one)
-    lines.push(`${label}. [open${one.isStale ? ', STALE: re-plan' : ''}] ${one.mine || one.ai} | check: ${one.check || '(none)'}`)
+  const { shown, more } = relevantOpen(list, NOTE_OPEN_MAX)
+  const limits = list.filter(one => isLive(one) && kindOf(one) === 'limit').slice(0, 3)
+  if (shown.length === 0 && limits.length === 0) return null
+  const lines = ['<intent-pane>A result arrived. If it runs one of these checks, update the pane now:']
+  for (const one of shown) {
+    lines.push(`${labelOf(list, one)}. [${one.isStale ? 'STALE' : one.isActive ? 'active' : 'open'}] ${clip(one.mine || one.ai, 80)} | check: ${clip(one.check || '(none)', 80)}`)
   }
-  for (const one of limits) {
-    lines.push(`${one.id}. [limit · ${one.broken ? 'BROKEN' : 'holding'}] ${one.mine || one.ai} | check: ${one.check || '(none)'}`)
-  }
-  lines.push(
-    `Passed → ${TOOL('intent_met')} with the evidence. Broke a met one → ${TOOL('intent_revise')} reopen: true. ` +
-      `Shows a limit broken → ${TOOL('intent_revise')} broken: "<evidence>". Unrelated → ignore this note.</intent-pane>`,
-  )
+  if (more > 0) lines.push(`(+${more} more open: intent_list)`)
+  for (const one of limits) lines.push(`${one.id}. [limit · ${one.broken ? 'BROKEN' : 'holding'}] ${clip(one.mine || one.ai, 80)}`)
+  lines.push(`Passed → ${TOOL('intent_met')}. Broke one → ${TOOL('intent_revise')} reopen / broken. Unrelated → ignore.</intent-pane>`)
   return lines.join('\n')
 }
 
@@ -1063,10 +1052,16 @@ export const register: Register = on => {
     await update($, stage, old => (old.now === 'ask' || old.now === 'approve' ? { ...old, now: null } : old))
     const context = [...(e.context ?? []), ...(isPerson ? [RECORD_FIRST] : [])]
     if (!(await read($, isDirty))) return next({ ...e, context })
-    const block = `<intent-pane>\nThe intent pane for this worktree (the person's words are authoritative). Current list:\n${listText(
-      await read($, purpose),
-      await read($, intents),
-    )}\n</intent-pane>`
+    // The list in brief, and in full only what changed since Claude last saw it.
+    const current = await read($, intents)
+    const seen = await read($, shownToClaude)
+    const changed = current.filter(one => seen[one.id] !== JSON.stringify(one) && (isLive(one) || seen[one.id] !== undefined))
+    const detailed = [...changed.filter(isLive), ...changed.filter(one => !isLive(one))].slice(0, CHANGED_SHOWN)
+    const details =
+      detailed.length > 0
+        ? `\nChanged since you last saw it${changed.length > detailed.length ? ` (${detailed.length} of ${changed.length})` : ''}:\n${itemLines(current, detailed)}`
+        : ''
+    const block = `<intent-pane>\nThe intent pane for this worktree (the person's words are authoritative).\n${await briefFor($)}${details}\n</intent-pane>`
     await update($, isDirty, () => false)
 
     return next({ ...e, context: [...context, block] })
@@ -1191,7 +1186,7 @@ export const register: Register = on => {
     const after = await read($, intents)
     const labels = items.flatMap(item => after.filter(one => one.id === item.id).map(one => labelOf(after, one)))
 
-    return { result: `Added: ${labels.join(', ')}\n\n${briefText(after)}` }
+    return { result: `Added: ${labels.join(', ')}\n\n${await briefFor($)}` }
   })
 
   on('tool.call', { tool: 'mcp__intent-tracker__intent_list' }, async $ => {
@@ -1228,7 +1223,7 @@ export const register: Register = on => {
     await save($)
     await refreshTitle($)
 
-    return { result: briefText(await read($, intents)) }
+    return { result: await briefFor($) }
   })
 
   on('tool.call', { tool: 'mcp__intent-tracker__intent_revise' }, async ($, e) => {
@@ -1341,7 +1336,7 @@ export const register: Register = on => {
     await save($)
     await refreshTitle($)
 
-    return { result: briefText(await read($, intents)) }
+    return { result: await briefFor($) }
   })
 
   // Every call moves the live activity (plan, investigate, build, test, fix,

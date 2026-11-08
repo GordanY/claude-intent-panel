@@ -405,21 +405,50 @@ export function merge3<C extends Core>(base: C | null, local: C, stored: C | nul
 }
 
 /**
- * The list in brief, for the answer to a change: each live item's label,
- * state and summary, one line each. The full text (checks, evidence) is
- * intent_list's.
+ * The list in brief: open requests with their open parts (finished parts
+ * as a count), limits, and every finished request folded into one line.
+ * Checks, evidence and sources are intent_list's.
  */
-export function briefText(list: readonly Intent[]): string {
+export function briefText(p: Purpose, list: readonly Intent[]): string {
   const { met, total } = progress(list)
-  const lines = [`Progress: ${met}/${total} parts met. Full details: intent_list.`]
-  const mark = (one: Intent) => {
-    if (kindOf(one) === 'limit') return one.broken ? 'BROKEN' : 'holding'
-    if (partsOf(list, one.id).length > 0) return isDone(list, one) ? 'met' : 'open'
-    return one.isMet ? 'met' : one.isStale ? 'stale' : one.isActive ? 'active' : 'open'
+  const lines = [`Purpose: ${p.mine || p.ai || '(unset)'}`, `Progress: ${met}/${total} parts met. Details: intent_list.`]
+  const state = (one: Intent) =>
+    one.isMet ? 'met' : one.isStale ? 'stale' : one.isActive ? 'active' : one.isAuto ? 'open, auto' : 'open'
+  const live = list.filter(one => isRequest(one) && isLive(one))
+  const finished: string[] = []
+  for (const request of live) {
+    if (kindOf(request) === 'limit') {
+      lines.push(`${request.id}. [limit · ${request.broken ? 'BROKEN' : 'holding'}] ${clip(request.ai, 70)}`)
+      continue
+    }
+    if (isDone(list, request)) {
+      finished.push(request.id)
+      continue
+    }
+    const parts = partsOf(list, request.id)
+    const done = parts.filter(part => part.isMet).length
+    lines.push(`${request.id}. [${parts.length > 0 ? `${done}/${parts.length}` : state(request)}] ${clip(request.ai, 70)}`)
+    for (const part of parts.filter(one => !one.isMet)) lines.push(`  ${labelOf(list, part)}. [${state(part)}] ${clip(part.ai, 70)}`)
   }
-  for (const request of list.filter(one => isRequest(one) && isLive(one))) {
-    lines.push(`${request.id}. [${mark(request)}] ${clip(request.ai, 70)}`)
-    for (const part of partsOf(list, request.id)) lines.push(`  ${labelOf(list, part)}. [${mark(part)}] ${clip(part.ai, 70)}`)
-  }
+  if (finished.length > 0) lines.push(`Done: ${finished.join(', ')}`)
   return lines.join('\n')
+}
+
+/** The full line of each item, as Claude reads changed items in detail. */
+export function itemLines(list: readonly Intent[], items: readonly Intent[]): string {
+  return items.map(one => line(list, one, false)).join('\n')
+}
+
+/**
+ * The open goals worth putting beside a result, most relevant first: parts
+ * being worked on, then the other open parts of their requests, then the
+ * rest; at most `max`.
+ */
+export function relevantOpen(list: readonly Intent[], max: number): { shown: Intent[]; more: number } {
+  const open = units(list).filter(one => !one.isMet)
+  const active = open.filter(one => one.isActive)
+  const sameRequest = open.filter(one => !one.isActive && active.some(a => a.parent && a.parent === one.parent))
+  const rest = open.filter(one => !active.includes(one) && !sameRequest.includes(one))
+  const ranked = [...active, ...sameRequest, ...rest]
+  return { shown: ranked.slice(0, max), more: Math.max(0, ranked.length - max) }
 }
