@@ -84,8 +84,73 @@ const activity = atom({ plugin: 'intent-tracker', key: 'activity' } as const, {}
 /** Work still running beside the main loop, not shown on a part: background commands and subagents. */
 const background = atom(
   { plugin: 'intent-tracker', key: 'background' } as const,
-  {} as Record<string, { label: string; stage: StageKey; at: number }>,
+  {} as Record<string, { label: string; stage: StageKey; at: number; path?: string; lastOutputAt?: number }>,
 )
+
+/** How often running background work is checked against what Claude Code reports (no model). */
+const RECONCILE_MS = 5_000
+const ENDED: readonly string[] = ['completed', 'failed', 'killed']
+
+/**
+ * Checks running work against the facts, no model involved: subagents
+ * against Claude Code's own list of them (an ended one leaves; a running one
+ * not yet shown, say from before a reload, joins); background commands
+ * against their output file (gone: it leaves; otherwise when it last wrote).
+ */
+async function reconcile($: EngineInterface): Promise<void> {
+  const agents = await $.agent.list().catch(() => null)
+  if (agents) {
+    const byId = new Map(agents.map(agent => [agent.id, agent]))
+    const isOver = (id: string) => {
+      const agent = byId.get(id)
+      return !agent || ENDED.includes(agent.status)
+    }
+    await update($, background, b =>
+      Object.fromEntries(Object.entries(b).filter(([key]) => !key.startsWith('agent:') || !isOver(key.slice(6)))),
+    )
+    const links = await read($, agentLinks)
+    const gone = Object.keys(links).filter(isOver)
+    if (gone.length > 0) {
+      await update($, agentLinks, l => Object.fromEntries(Object.entries(l).filter(([id]) => !gone.includes(id))))
+      const still = new Set(Object.values(await read($, agentLinks)))
+      await update($, activity, a => Object.fromEntries(Object.entries(a).filter(([part]) => still.has(part) || !gone.some(id => links[id] === part))))
+    }
+    const shown = await read($, background)
+    const linked = await read($, agentLinks)
+    const fresh = agents.filter(
+      agent => ['pending', 'running', 'waiting'].includes(agent.status) && !shown[`agent:${agent.id}`] && !linked[agent.id],
+    )
+    if (fresh.length > 0) {
+      const at = await $.clock.now()
+      await update($, spawned, m => ({ ...m, ...Object.fromEntries(fresh.map(agent => [agent.id, agent.description])) }))
+      await update($, background, b => ({
+        ...b,
+        ...Object.fromEntries(fresh.map(agent => [`agent:${agent.id}`, { label: shortLabel(agent.description), stage: 'think' as StageKey, at }])),
+      }))
+    }
+  }
+
+  const commands = Object.entries(await read($, background)).filter(([key]) => key.startsWith('cmd:'))
+  if (commands.length === 0) return
+  // Where each command writes: told to the model in its call's result ("Output is being written to: …").
+  let texts: string[] | null = null
+  for (const [key, item] of commands) {
+    let path = item.path
+    if (!path) {
+      texts ??= (await $.session.messages().catch(() => [])).flatMap(m => m.toolUses.map(use => use.text ?? ''))
+      const id = key.slice(4)
+      const line = texts.find(text => text.includes(id) && text.includes('Output is being written to'))
+      path = line?.match(/Output is being written to:\s*(\S+?\.output)/)?.[1]
+      if (!path) continue
+    }
+    const info = await $.fs.stat(path).catch(() => null)
+    if (!info) {
+      await update($, background, b => without(b, key))
+      continue
+    }
+    await update($, background, b => (b[key] ? { ...b, [key]: { ...b[key], path, lastOutputAt: info.mtimeMs } } : b))
+  }
+}
 const without = <T,>(m: Record<string, T>, key: string): Record<string, T> => Object.fromEntries(Object.entries(m).filter(([k]) => k !== key))
 
 /** A short name for a background item: a subagent's description without its leading [tag], or the command. */
@@ -194,7 +259,7 @@ type Saved = { purpose: Purpose; intents: Intent[]; drift: Drift | null; updated
 const instructions = (language: string) => `# Intent pane (intent-tracker mod)
 A pane beside the chat shows the person, in plain ${language}, what they asked for in this worktree and how far it has got, so they do not get lost when the conversation turns technical. The list is kept per worktree across sessions. Keep it accurate and quiet (do not narrate these calls).
 What the list holds, in two layers:
-- REQUESTS: only what the person asked for, never your own ideas or technical tasks. A goal is an outcome they want; a limit is something they said must not happen or must stay as it is ("don't touch sync"); a limit is never ticked, it holds or is broken. Each request carries \`source\`: the person's own words that asked for it, quoted exactly from their message (or their pane text); the tool refuses words the person never said. Work you suggest joins only once they say yes; then quote their yes.
+- REQUESTS: only what the person asked for, never your own ideas or technical tasks. A goal is an outcome they want; a limit is something that must not be touched or broken WHILE the work is done ("don't touch sync", "keep the API the same"); a limit is never ticked, it holds or is broken. A request phrased in the negative about the result itself ("don't show X", "stop doing Y") is a goal, not a limit: it is done once the change is made. Each request carries \`source\`: the person's own words that asked for it, quoted exactly from their message (or their pane text); the tool refuses words the person never said. Work you suggest joins only once they say yes; then quote their yes.
 - PARTS: break each goal request into the parts the person would recognise as pieces of what they asked: plain outcomes they can follow ("drafts survive closing the app", "sync still works"), never technical steps ("edit NoteStore.swift", "add a test"). Add them with \`parent\`: the request's id. A single request usually has several parts; progress counts parts, and a request is done when all its parts are. Revise the breakdown as you learn more (add parts, cancel ones that no longer apply).
 - ORDER AND FOCUS: keep parts in the order they will be done (intent_revise position). Mark the parts being worked on now with ${TOOL('intent_revise')} active: true (any number at once; ticking a part ends it). When you send a subagent for a part, also give agent: "<words from that subagent's description>" so its activity shows on that part. Parts are yours to add, edit, reorder or cancel without asking; the person gets one notice per turn.
 - SHAPE BY KIND OF WORK (parts are outcomes the person can follow, never steps): a bug → "it no longer happens" + "nothing else broke"; a new feature → each behaviour the person will see; a refactor → "it behaves the same" (a goal with a regression check); a question or investigation → "you have your answer" (ticked when you have answered it with evidence); docs or config → "the page/setting says X"; a release → each irreversible outcome in order ("the build is on TestFlight").
@@ -640,7 +705,7 @@ async function checkTurn($: EngineInterface, durationMs = 0, mode: 'turn' | 'res
       (isTurn
         ? '4. drift: work clearly unrelated to every item and to the purpose, that the person did not ask for. Investigation, setup, verification and fixing what blocks an item are on track.\n' +
           "5. From the person's latest message only (skip if it is a notification), and only what the list does not already show:\n" +
-          '   add: something they asked for that is no item yet: an outcome they want or a limit they set. Not a question, not thanks, not approval of a step already listed.\n' +
+          '   add: something they asked for that is no item yet: an outcome they want (kind goal), or something that must not be touched or broken while the work is done (kind limit). A negative request about the result itself ("don\'t show X") is a goal. Not a question, not thanks, not approval of a step already listed.\n' +
           '   cancel: a request they dropped ("never mind X", "skip X").\n' +
           '   replace: a request they changed into something else ("instead of X, do Y").\n' +
           '   Each needs "quote": their exact words from that message.\n'
@@ -793,6 +858,10 @@ async function activate($: EngineInterface): Promise<void> {
   await update($, now, () => at)
   $.clock.every(60_000, () => {
     void $.clock.now().then(t => update($, now, () => t))
+  })
+  // Running background work, checked against the facts every few seconds.
+  $.clock.every(RECONCILE_MS, () => {
+    void reconcile($).catch(() => undefined)
   })
   // Another session in this worktree (a terminal beside the desktop app, or
   // the reverse) may change the shared list or language: pick it up.
@@ -1137,17 +1206,22 @@ export const register: Register = on => {
     const isTest = isVerify && TEST_COMMAND.test(command)
     const agentId = (e as { agentId?: string }).agentId
     const before = await read($, stage)
-    const step = isVerify && !isTest ? 'build' : stageOf(call, isTest, agentId ? false : before.isTestFailing)
+    const step = isVerify && !isTest ? 'compile' : stageOf(call, isTest, agentId ? false : before.isTestFailing)
     // While the tool runs, its stage; once it returns, the model is thinking again.
     if (step) await setNow($, agentId, step)
     const done = await next(e)
     if (step) await setNow($, agentId, 'think')
+    // A background task stopped by hand sends no completion notice: it leaves now.
+    if ((call.tool === 'TaskStop' || call.tool === 'KillShell') && !('deny' in done)) {
+      const stopped = str(call.task_id) || str(call.shell_id)
+      if (stopped) await update($, background, b => without(without(b, `cmd:${stopped}`), `agent:${stopped}`))
+    }
     // A command sent to the background keeps running after its call returns: shown until its notification.
     const taskId = !('deny' in done) && call.tool === 'Bash' ? (done.result as { backgroundTaskId?: unknown } | undefined)?.backgroundTaskId : undefined
     if (typeof taskId === 'string' && taskId) {
       const at = await $.clock.now()
       const label = shortLabel(typeof call.description === 'string' && call.description ? call.description : command)
-      const kind: StageKey = isTest ? 'test' : isVerify ? 'build' : 'run'
+      const kind: StageKey = isTest ? 'test' : isVerify ? 'compile' : 'run'
       await update($, background, b => ({ ...b, [`cmd:${taskId}`]: { label, stage: kind, at } }))
     }
     if (agentId || !isResult(call) || 'deny' in done) return done
@@ -1512,6 +1586,11 @@ export const register: Register = on => {
               {chosen.code === 'zh' || chosen.code === 'ja' ? `「${item.label}」` : ` "${item.label}"`}
               {t.colon}
               {t.stage[item.stage]}
+              {(() => {
+                // A command quiet for a while says so: it may be waiting, or stuck.
+                const quiet = item.lastOutputAt ? Math.floor((nowMs - item.lastOutputAt) / 60_000) : 0
+                return quiet >= 2 ? t.paren(t.quietFor(quiet)) : ''
+              })()}
             </Text>
           </Box>
         ))}

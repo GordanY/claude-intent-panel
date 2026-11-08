@@ -122,8 +122,9 @@ export type Strings = {
   history: string
   actor: Record<'person' | 'claude' | 'auto', string>
   what: Record<'added' | 'edited' | 'met' | 'reopened' | 'confirmed' | 'cancelled' | 'replaced' | 'restored' | 'broken' | 'holding', string>
-  stage: Record<'plan' | 'investigate' | 'build' | 'test' | 'fix' | 'review' | 'think' | 'run', string>
+  stage: Record<'plan' | 'investigate' | 'build' | 'test' | 'fix' | 'review' | 'think' | 'run' | 'compile', string>
   alongside: string
+  quietFor: (minutes: number) => string
   subagent: string
   backgroundCommand: string
   startPrompt: (tools: Tools, lang: string) => string
@@ -183,7 +184,7 @@ const EN: Strings = {
   autoCancelled: ids => `cancelled ${ids.join(', ')}`,
   autoReplaced: ids => `replaced ${ids.join(', ')}`,
   autoAdded: n => `added ${n} request${n === 1 ? '' : 's'}`,
-  limits: 'Limits',
+  limits: 'Rules to keep during the work',
   partsChanged: (what, ids) =>
     `Claude ${{ added: 'added', edited: 'edited', cancelled: 'cancelled', moved: 'moved', restored: 'restored' }[what]} ${ids.map(x => `"${x}"`).join(', ')}`,
   toastTurn: notes => notes.join('; '),
@@ -191,7 +192,7 @@ const EN: Strings = {
   nowLabel: 'now',
   staleLabel: 'may be out of date',
   seenInOutput: 'seen in output',
-  holding: 'holding',
+  holding: 'kept so far',
   brokenLabel: 'Broken',
   confirmCancelItem: 'Cancel this item?',
   cancelYes: 'Cancel it',
@@ -217,8 +218,9 @@ const EN: Strings = {
     broken: 'broken',
     holding: 'holding again',
   },
-  stage: { plan: 'Plan', investigate: 'Investigate', build: 'Build', test: 'Test', fix: 'Fix', review: 'Review', think: 'Thinking', run: 'Running' },
+  stage: { plan: 'Plan', investigate: 'Investigate', build: 'Editing', test: 'Test', fix: 'Fix', review: 'Review', think: 'Thinking', run: 'Running', compile: 'Building' },
   alongside: 'Also running',
+  quietFor: m => `no new output for ${m} min`,
   subagent: 'Subagent',
   backgroundCommand: 'Background command',
   startPrompt: (t, lang) =>
@@ -283,7 +285,7 @@ const ZH: Strings = {
   autoCancelled: ids => `取消 ${ids.join('、')}`,
   autoReplaced: ids => `取代 ${ids.join('、')}`,
   autoAdded: n => `加入 ${n} 項需求`,
-  limits: '限制',
+  limits: '過程中要遵守的限制',
   partsChanged: (what, ids) =>
     `Claude ${{ added: '新增', edited: '修改', cancelled: '取消', moved: '移動', restored: '還原' }[what]}了「${ids.join('」「')}」`,
   toastTurn: notes => notes.join('；'),
@@ -291,7 +293,7 @@ const ZH: Strings = {
   nowLabel: '現在',
   staleLabel: '可能過時',
   seenInOutput: '從輸出看到',
-  holding: '守住中',
+  holding: '目前有遵守',
   brokenLabel: '被破壞',
   confirmCancelItem: '取消這一項？',
   cancelYes: '取消它',
@@ -317,8 +319,9 @@ const ZH: Strings = {
     broken: '被破壞',
     holding: '恢復守住',
   },
-  stage: { plan: '規劃', investigate: '調查', build: '實作', test: '測試', fix: '修正', review: '審查', think: '思考中', run: '執行中' },
+  stage: { plan: '規劃', investigate: '調查', build: '實作', test: '測試', fix: '修正', review: '審查', think: '思考中', run: '執行中', compile: '建置' },
   alongside: '同時進行',
+  quietFor: m => `${m} 分鐘沒有新輸出`,
   subagent: '子代理',
   backgroundCommand: '背景指令',
   startPrompt: (t, lang) =>
@@ -385,7 +388,7 @@ const JA: Strings = {
   autoCancelled: ids => `${ids.join('、')} を取り消し`,
   autoReplaced: ids => `${ids.join('、')} を置き換え`,
   autoAdded: n => `依頼を ${n} 件追加`,
-  limits: '制約',
+  limits: '作業中に守るルール',
   partsChanged: (what, ids) =>
     `Claude が「${ids.join('」「')}」を${{ added: '追加', edited: '編集', cancelled: '取り消し', moved: '移動', restored: '復元' }[what]}しました`,
   toastTurn: notes => notes.join('；'),
@@ -393,7 +396,7 @@ const JA: Strings = {
   nowLabel: '現在',
   staleLabel: '古い可能性あり',
   seenInOutput: '出力で確認',
-  holding: '維持中',
+  holding: 'ここまで守られている',
   brokenLabel: '破られた',
   confirmCancelItem: 'この項目を取り消しますか？',
   cancelYes: '取り消す',
@@ -419,8 +422,9 @@ const JA: Strings = {
     broken: '破られた',
     holding: '再び維持',
   },
-  stage: { plan: '計画', investigate: '調査', build: '実装', test: 'テスト', fix: '修正', review: 'レビュー', think: '思考中', run: '実行中' },
+  stage: { plan: '計画', investigate: '調査', build: '実装', test: 'テスト', fix: '修正', review: 'レビュー', think: '思考中', run: '実行中', compile: 'ビルド' },
   alongside: '並行中',
+  quietFor: m => `${m} 分間出力なし`,
   subagent: 'サブエージェント',
   backgroundCommand: 'バックグラウンド処理',
   startPrompt: (t, lang) =>

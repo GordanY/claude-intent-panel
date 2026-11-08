@@ -83,7 +83,7 @@ export type Intent = {
 }
 
 /** Where the work is now: plan, investigate, build, test, fix (after a failed test), review. */
-export type StageKey = 'plan' | 'investigate' | 'build' | 'test' | 'fix' | 'review' | 'think' | 'run'
+export type StageKey = 'plan' | 'investigate' | 'build' | 'test' | 'fix' | 'review' | 'think' | 'run' | 'compile'
 
 export type Stage = { now: StageKey | null; seen: StageKey[]; at: number; isTestFailing: boolean }
 
@@ -125,7 +125,7 @@ declare module 'claude-code' {
        * Work still running beside the main loop and not shown on a part:
        * background commands ("cmd:<task id>") and subagents ("agent:<id>").
        */
-      background: Record<string, { label: string; stage: StageKey; at: number }>
+      background: Record<string, { label: string; stage: StageKey; at: number; path?: string; lastOutputAt?: number }>
       /** Running subagents linked to a part: agent id → part id. */
       agentLinks: Record<string, string>
       /** Subagents started in this session, by id: their description (to link them later). */

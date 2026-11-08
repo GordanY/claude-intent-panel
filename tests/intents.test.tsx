@@ -35,6 +35,10 @@ const ui = {
   registered: 0,
   clock: null as unknown as ReturnType<typeof mock.clock>,
   messages: [] as unknown[],
+  /** Files that exist, by path: their last-modified time. */
+  files: {} as Record<string, number>,
+  /** What Claude Code reports as this session's agents. */
+  agents: [] as { id: string; description: string; type: string; status: string }[],
 }
 
 /** What the person asked at the start of every test conversation: the words the seeded requests quote. */
@@ -90,7 +94,12 @@ function engine(
   }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
+  ui.files = {}
+  ui.agents = []
+  on('agent.list', () => ({ value: ui.agents }) as never)
   on('fs.stat', (_, e) => {
+    const mtime = ui.files[e.path]
+    if (mtime !== undefined) return { value: { kind: 'file', size: 1, mtimeMs: mtime, isLink: false } }
     if (!dirs.includes(e.path)) throw new Error(`ENOENT: ${e.path}`)
     return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } }
   })
@@ -893,7 +902,7 @@ test('a limit sits apart, is never ticked or counted, and shows when broken', as
   let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   let shown = await texts(pane)
   expect(shown.some(x => x.endsWith(' 0/1') && /[▓░]/.test(x))).toBe(true)
-  expect(shown).toContain('限制')
+  expect(shown).toContain('過程中要遵守的限制')
   expect(shown).toContain('🛡 2. 同步不受影響')
   await pane.unmount()
 
@@ -1332,5 +1341,61 @@ test('work running in the background shows until it really ends: a background te
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   shown = await texts(pane)
   expect(shown.some(x => x.includes('同時進行') || x.includes('xcodebuild') || x.includes('scan the export'))).toBe(false)
+  await pane.unmount()
+})
+
+test('running work is checked every few seconds against the facts: ended subagents leave, stopped or vanished commands leave, a quiet one says so', async ($, on) => {
+  engine(on)
+  on('tool.call', (_, e) => {
+    const call = e as { tool?: string; command?: string; run_in_background?: boolean }
+    if (call.run_in_background) {
+      const id = call.command === 'npm test' ? 'bg-1' : 'bg-2'
+      return { result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: id } } as never
+    }
+    return { result: 'ok' } as never
+  })
+  on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'ag-1' }) as never)
+  await seed($)
+
+  await $.tool.call({ tool: 'Bash', command: 'npm test', run_in_background: true } as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  await $.agent.spawn({ prompt: 'x', description: 'scan the docs' })
+  // An agent started before a reload: running, never seen spawning.
+  ui.agents = [
+    { id: 'ag-1', description: 'scan the docs', type: 'Explore', status: 'running' },
+    { id: 'ag-0', description: '[Opus High] audit the export path', type: 'general-purpose', status: 'running' },
+  ]
+  // Where the test writes, as the model read it; it last wrote 3 minutes ago.
+  const path = '/tmp/session/tasks/bg-1.output'
+  setMessages(() => ({
+    value: [
+      {
+        role: 'assistant',
+        text: '',
+        toolUses: [{ tool_use_id: 'b', tool: 'Bash', input: {}, text: `Command running in background with ID: bg-1. Output is being written to: ${path}` }],
+      },
+    ],
+  }))
+  ui.files[path] = ui.clock.now() - 3 * 60_000
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  let shown = await texts(pane)
+  expect(shown).toContain('  背景指令「npm test」：測試（3 分鐘沒有新輸出）')
+  expect(shown).toContain('  背景指令「npm run build」：建置')
+  expect(shown).toContain('  子代理「scan the docs」：思考中')
+  expect(shown).toContain('  子代理「audit the export path」：思考中')
+  await pane.unmount()
+
+  // The build is stopped by hand; the test's output file vanishes; the subagents end.
+  await $.tool.call({ tool: 'TaskStop', task_id: 'bg-2' } as never)
+  delete ui.files[path]
+  ui.agents = ui.agents.map(agent => ({ ...agent, status: agent.id === 'ag-1' ? 'completed' : 'killed' }))
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  shown = await texts(pane)
+  expect(shown.some(x => x.includes('同時進行') || x.includes('背景指令') || x.includes('子代理'))).toBe(false)
   await pane.unmount()
 })
