@@ -45,6 +45,8 @@ const ui = {
   messageReads: 0,
   /** What Claude Code reports as this session's agents. */
   agents: [] as { id: string; description: string; type: string; status: string }[],
+  /** Each subagent's own transcript, by agent id (what `$.session.messages({ agentId })` reads). */
+  agentMessages: {} as Record<string, unknown[]>,
 }
 
 /** What the person asked at the start of every test conversation: the words the seeded requests quote. */
@@ -85,8 +87,11 @@ function engine(
   ui.registered = 0
   ui.messages = [ASK]
   ui.messageReads = 0
-  on('session.messages', () => {
+  ui.agentMessages = {}
+  on('session.messages', (_, e) => {
     ui.messageReads += 1
+    const agentId = (e as { agentId?: string }).agentId
+    if (agentId) return { value: ui.agentMessages[agentId] ?? [] } as never
     return { value: ui.messages } as never
   })
   on('tool.register', () => {
@@ -2825,3 +2830,139 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await page()).toBe('#1e1f22')
   })
 }
+
+test('a background notification as Claude Code delivers it (origin task-notification, no isMeta) ends its command; two runs under one title are two rows', async ($, on) => {
+  engine(on)
+  let id = 0
+  on('tool.call', (_, e) =>
+    ((e as { run_in_background?: boolean }).run_in_background
+      ? { result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: `bg-${++id}` } }
+      : { result: 'ok' }) as never,
+  )
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  await seed($)
+  // The same command run twice under one title, the first not yet over: each is its own task.
+  await $.tool.call({ tool: 'Bash', command: 'bash scripts/premerge_gate.sh --lints-only', description: '[shell] premerge gate lints-only on final tree', run_in_background: true } as never)
+  await $.tool.call({ tool: 'Bash', command: 'bash scripts/premerge_gate.sh --lints-only', description: '[shell] premerge gate lints-only on final tree', run_in_background: true } as never)
+  const rows = async () => {
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const all = (await texts(pane)).filter(x => x.includes('premerge gate'))
+    await pane.unmount()
+    return all.length
+  }
+  expect(await rows()).toBe(2)
+  // The first one's notification, shaped as the session stores it: no isMeta, origin task-notification.
+  const notice = (taskId: string) =>
+    `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<output-file>/tmp/t/${taskId}.output</output-file>\n<status>completed</status>\n<summary>Background command "premerge gate" completed (exit code 0)</summary>\n</task-notification>`
+  const result = await $.prompt.submit({ text: notice('bg-1'), origin: { kind: 'task-notification' } } as never)
+  // Only its own row leaves; the open goals ride beside the result, and it is no word of the person's.
+  expect(await rows()).toBe(1)
+  expect('context' in result && (result.context ?? []).some(c => c.includes('不要動到同步'))).toBe(true)
+  await $.prompt.submit({ text: notice('bg-2'), origin: { kind: 'task-notification' } } as never)
+  expect(await rows()).toBe(0)
+})
+
+test("background commands a subagent starts leave when their output ends, read from that subagent's transcript, or at the latest when the subagent ends", async ($, on) => {
+  engine(on)
+  let id = 0
+  on('tool.call', (_, e) =>
+    ((e as { run_in_background?: boolean }).run_in_background
+      ? { result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: `bg-${++id}` } }
+      : { result: 'ok' }) as never,
+  )
+  const out: Record<string, string> = { '/tmp/t/bg-1.output': 'compiling…\n' }
+  on('fs.read', (_, e) => {
+    const text = out[e.path]
+    if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
+    return { value: text } as never
+  })
+  on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'ag-t' }) as never)
+  await seed($)
+  await $.agent.spawn({ prompt: 'run the suites', description: '[Opus High] run focused suites', subagentType: 'test-runner' })
+  ui.agents = [{ id: 'ag-t', description: '[Opus High] run focused suites', type: 'test-runner', status: 'running' }]
+  // Inside the subagent: one build whose output path its transcript names, one test whose path it never shows.
+  await $.tool.call({ tool: 'Bash', command: 'xcodebuild build-for-testing', description: '[shell] build-for-testing on 13-inch simulator', run_in_background: true, agentId: 'ag-t' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'xcodebuild test-without-building', description: '[shell] test-without-building on 11-inch simulator', run_in_background: true, agentId: 'ag-t' } as never)
+  ui.agentMessages['ag-t'] = [
+    {
+      role: 'assistant',
+      text: '',
+      toolUses: [{ tool_use_id: 'x1', tool: 'Bash', input: {}, text: 'Command running in background with ID: bg-1. Output is being written to: /tmp/t/bg-1.output. You will be notified when it completes' }],
+    },
+  ]
+  ui.files['/tmp/t/bg-1.output'] = 1
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+  const shown = async () => {
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const all = (await texts(pane)).join('\n')
+    await pane.unmount()
+    return ['build-for-testing', 'test-without-building'].filter(label => all.includes(label))
+  }
+  expect(await shown()).toEqual(['build-for-testing', 'test-without-building'])
+  // The build ends: its exit line, in the file the subagent's transcript named (its notification reached only the subagent).
+  out['/tmp/t/bg-1.output'] = 'compiling…\n** TEST BUILD SUCCEEDED **\n\n[exited with code 0]\n'
+  ui.files['/tmp/t/bg-1.output'] = 2
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+  expect(await shown()).toEqual(['test-without-building'])
+  // The subagent ends: what it started cannot be heard of again, so it leaves too.
+  ui.agents = [{ id: 'ag-t', description: '[Opus High] run focused suites', type: 'test-runner', status: 'completed' }]
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+  expect(await shown()).toEqual([])
+})
+
+test('a background command whose owner no agent list names (a workflow agent, an engine fork) stays until its own end: its exit line or its notification', async ($, on) => {
+  engine(on)
+  let id = 0
+  on('tool.call', (_, e) =>
+    ((e as { run_in_background?: boolean }).run_in_background
+      ? { result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: `bg-${++id}` } }
+      : { result: 'ok' }) as never,
+  )
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  const out: Record<string, string> = { '/tmp/t/bg-1.output': 'linting…\n' }
+  on('fs.read', (_, e) => {
+    const text = out[e.path]
+    if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
+    return { value: text } as never
+  })
+  await seed($)
+  // Another subagent is listed; the workflow agent that starts the commands never is.
+  ui.agents = [{ id: 'ag-other', description: 'scan the docs', type: 'Explore', status: 'running' }]
+  await $.tool.call({ tool: 'Bash', command: 'bash scripts/premerge_gate.sh --lints-only', description: '[shell] lints on the candidate', run_in_background: true, agentId: 'wf-1' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'xcodebuild build-for-testing', description: '[shell] build the candidate', run_in_background: true, agentId: 'wf-1' } as never)
+  ui.agentMessages['wf-1'] = [
+    {
+      role: 'assistant',
+      text: '',
+      toolUses: [{ tool_use_id: 'w1', tool: 'Bash', input: {}, text: 'Command running in background with ID: bg-1. Output is being written to: /tmp/t/bg-1.output.' }],
+    },
+  ]
+  ui.files['/tmp/t/bg-1.output'] = 1
+  const shown = async () => {
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const all = (await texts(pane)).join('\n')
+    await pane.unmount()
+    return ['lints on the candidate', 'build the candidate'].filter(label => all.includes(label))
+  }
+  // Tick after tick, an owner never listed is not taken for an ended one.
+  for (let tick = 0; tick < 4; tick += 1) {
+    await ui.clock.advance(5_000)
+    await ui.clock.settle()
+  }
+  expect(await shown()).toEqual(['lints on the candidate', 'build the candidate'])
+  // The first one's output ends with its exit line (its path read from the owner's transcript).
+  out['/tmp/t/bg-1.output'] = 'linting…\nok\n\n[exited with code 0]\n'
+  ui.files['/tmp/t/bg-1.output'] = 2
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+  expect(await shown()).toEqual(['build the candidate'])
+  // The second one's notification arrives.
+  await $.prompt.submit({
+    text: '<task-notification>\n<task-id>bg-2</task-id>\n<status>completed</status>\n</task-notification>',
+    origin: { kind: 'task-notification' },
+  } as never)
+  expect(await shown()).toEqual([])
+})
