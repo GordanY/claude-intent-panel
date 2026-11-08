@@ -34,6 +34,7 @@ This repository is private: installing needs read access on GitHub and a git cre
 
 - The pane opens by itself when the terminal is wide enough (about 144 columns); type `/intents` to open it at any width.
 - Close it with its close mark: once you close it, list changes no longer reopen it in that session. `/intents` brings it back.
+- An empty pane shows **開始整理**: it asks Claude to build the purpose and goals from the conversation so far (useful in a session that was already running), ticking goals already verified.
 - **重新整理 AI 內容** asks Claude to redo the AI side (purpose, goal summaries, checks and ticks) from the current conversation; your own words are never changed.
 - In the terminal, move focus into the pane with `ctrl+x tab` (or click) to type in a field.
 

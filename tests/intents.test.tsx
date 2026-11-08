@@ -164,7 +164,7 @@ test('clearing takes two presses and removes the saved list', async ($, on) => {
 
   expect(store.get(`wt:${ROOT}`)).toBeUndefined()
   const after = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await after.find({ type: 'Text' }))?.text).toBe('還沒有目標。開始描述這次要做的事，Claude 會在這裡整理出來。')
+  expect((await after.find({ type: 'Text', text: /還沒有目標/ }))?.text).toBe('還沒有目標。開始描述這次要做的事，Claude 會在這裡整理出來。')
   await after.unmount()
 })
 
@@ -255,4 +255,25 @@ test("the refresh button asks Claude to redo the AI side only, and the person's 
 
   const refused = await $.tool.call({ tool: 'mcp__intent-tracker__intent_revise' } as never)
   expect('deny' in refused && typeof refused.deny === 'string').toBe(true)
+})
+
+test('an empty pane offers a start button that asks Claude to build the list from the conversation', async ($, on) => {
+  engine(on)
+  const submitted: string[] = []
+  on('prompt.submit', (_, e) => {
+    submitted.push(e.text)
+    return { text: e.text, context: e.context }
+  })
+  await start($)
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await pane.find({ type: 'Button', key: 'start' })).toBeDefined()
+  await pane.press({ key: 'start' })
+  await pane.unmount()
+  expect(submitted.some(t => t.includes('請依目前為止的對話') && t.includes('mcp__intent-tracker__intent_add'))).toBe(true)
+
+  await seed($)
+  const filled = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await filled.find({ type: 'Button', key: 'start' })).toBeUndefined()
+  await filled.unmount()
 })

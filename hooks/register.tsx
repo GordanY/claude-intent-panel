@@ -29,6 +29,12 @@ const isDirty = atom({ plugin: 'intent-tracker', key: 'isDirty' } as const, fals
 const loadedRoot = atom({ plugin: 'intent-tracker', key: 'loadedRoot' } as const, null as string | null)
 const isClosedByPerson = atom({ plugin: 'intent-tracker', key: 'isClosedByPerson' } as const, false)
 
+const START_PROMPT =
+  '（目標面板）請依目前為止的對話，整理這次工作的原意和目標：' +
+  `用 ${TOOL('intent_add')} 設定一行白話的原意，和 1～5 個我真正想要的目標（每個附具體的檢查方式）；` +
+  `對話裡已經確實跑過、也通過檢查的目標，再用 ${TOOL('intent_met')} 補上依據打勾。` +
+  '只根據對話裡真的發生過的事；如果對話還看不出要做什麼，就直接問我。整理完用一兩句話告訴我。'
+
 const REFRESH_PROMPT =
   '（目標面板）請依目前的對話，重新整理目標面板裡的 AI 內容：原意和每個目標的白話摘要、檢查方式、打勾狀態。' +
   `用 ${TOOL('intent_revise')} 更新（原意用它的 purpose 欄位）；檢查其實沒有通過的目標用 reopen 取消打勾，確實通過但還沒勾的用 ${TOOL('intent_met')} 補上依據。` +
@@ -431,8 +437,19 @@ export const register: Register = on => {
 
     if (list.length === 0 && !p.ai) {
       return (
-        <Box flexDirection="column">
+        <Box flexDirection="column" gap={1}>
           <Text dimColor wrap="wrap">還沒有目標。開始描述這次要做的事，Claude 會在這裡整理出來。</Text>
+          <Text dimColor wrap="wrap">對話已經進行一段了？按「開始整理」，Claude 會依目前的對話整理出原意和目標。</Text>
+          <Box flexDirection="row">
+            <Button
+              key="start"
+              label="開始整理"
+              onPress={async () => {
+                await $.prompt.submit({ text: START_PROMPT })
+                $.ui.toast('已請 Claude 依目前的對話整理原意和目標')
+              }}
+            />
+          </Box>
         </Box>
       )
     }
