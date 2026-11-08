@@ -37,7 +37,7 @@ const START_PROMPT =
 
 const REFRESH_PROMPT =
   '（目標面板）請依目前的對話，重新整理目標面板裡的 AI 內容：原意和每個目標的白話摘要、檢查方式、打勾狀態。' +
-  `用 ${TOOL('intent_revise')} 更新（原意用它的 purpose 欄位）；檢查其實沒有通過的目標用 reopen 取消打勾，確實通過但還沒勾的用 ${TOOL('intent_met')} 補上依據。` +
+  `先用 ${TOOL('intent_list')} 讀目前的清單，再用 ${TOOL('intent_revise')} 更新（原意用它的 purpose 欄位）；檢查其實沒有通過的目標用 reopen 取消打勾，確實通過但還沒勾的用 ${TOOL('intent_met')} 補上依據。` +
   '不要改動我自己寫的字；我的字跟你的摘要不一致時，以我的字為準。整理完用一兩句話告訴我改了什麼。'
 
 type Saved = { purpose: Purpose; intents: Intent[]; drift: Drift | null }
@@ -46,9 +46,16 @@ const INSTRUCTIONS = `# Intent pane (intent-tracker mod)
 A pane beside the chat shows the person, in plain Traditional Chinese, what the work in this worktree is for and which goals are met, so they do not get lost when the conversation turns technical. The list is kept per worktree across sessions. Keep it accurate and quiet (do not narrate these calls):
 - When the person states the task, or the task changes, call ${TOOL('intent_add')} with a one-line \`purpose\` and the goals. Each goal: \`summary\` is one plain Traditional Chinese sentence a non-programmer understands (no file names, SHAs, flags or jargon); \`check\` is the concrete step that proves it (a test that passes, a behaviour observed, a diff condition), Traditional Chinese, identifiers allowed. Goals are outcomes the person wants, not your sub-steps: usually 1-5. Do not re-add goals already on the list.
 - Call ${TOOL('intent_met')} only after a goal's check has actually been run or observed and passed, with the evidence. Never on intent, partial work or an unrun check. If later work breaks a met goal, call ${TOOL('intent_revise')} with reopen: true.
+- To see the current list, call ${TOOL('intent_list')}; never call another intent tool just to read it.
 - The person may type their own words for the purpose or a goal; they reach you as context beside their prompt. Their words are the authority: when your summary or check diverges from them, revise yours to match, never the reverse.`
 
 const toolSpecs = [
+  {
+    name: 'intent_list',
+    description: "Read the intent pane's current purpose and goals (ids, status, checks, the person's own words). Changes nothing.",
+    inputSchema: { type: 'object', properties: {} },
+    isDeferred: false,
+  },
   {
     name: 'intent_add',
     description:
@@ -349,6 +356,12 @@ export const register: Register = on => {
     })
     await save($)
     await refreshTitle($)
+
+    return { result: listText(await read($, purpose), await read($, intents)) }
+  })
+
+  on('tool.call', { tool: 'mcp__intent-tracker__intent_list' }, async $ => {
+    await sync($)
 
     return { result: listText(await read($, purpose), await read($, intents)) }
   })

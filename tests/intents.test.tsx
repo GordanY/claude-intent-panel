@@ -241,9 +241,12 @@ test("the refresh button asks Claude to redo the AI side only, and the person's 
 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await pane.input({ key: 'mine-1', text: '草稿絕對不能不見' })
+
   await pane.press({ key: 'refresh-ai' })
   await pane.unmount()
   expect(submitted.some(t => t.includes('重新整理目標面板裡的 AI 內容') && t.includes('不要改動我自己寫的字'))).toBe(true)
+  // Claude reads the list with the read-only tool, never by provoking an error.
+  expect(submitted.some(t => t.includes('mcp__intent-tracker__intent_list'))).toBe(true)
 
   // What the model does with it: revise the purpose and a goal's summary.
   await $.tool.call({ tool: 'mcp__intent-tracker__intent_revise', purpose: '讓草稿永遠不會消失' } as never)
@@ -291,4 +294,15 @@ test('the bottom toolbar shows icon + text when wide and icon alone when narrow'
   expect((await narrow.find({ type: 'Button', key: 'refresh-ai' }))?.text).toBe('↻')
   expect((await narrow.find({ type: 'Button', key: 'clear' }))?.text).toBe('✕')
   await narrow.unmount()
+})
+
+test('intent_list reads the list without changing it or raising an error', async ($, on) => {
+  const store = engine(on)
+  await seed($)
+  const before = JSON.stringify(store.get(`wt:${ROOT}`))
+
+  const listed = await $.tool.call({ tool: 'mcp__intent-tracker__intent_list' } as never)
+  expect('deny' in listed && listed.deny !== undefined).toBe(false)
+  expect(JSON.stringify(listed)).toContain('關掉 app 後草稿要保留')
+  expect(JSON.stringify(store.get(`wt:${ROOT}`))).toBe(before)
 })
