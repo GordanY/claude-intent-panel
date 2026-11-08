@@ -388,20 +388,20 @@ test('the footer shows when the list last changed and which models do the work',
   await seed($)
 
   let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('剛剛 · 整理 Opus 5.5 · 偏題 ')
-  expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('Haiku')
+  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('剛剛 · 整理 Opus 5.5')
+  expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('偏題 Haiku')
   expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 中文')
   expect((await pane.find({ type: 'Text', text: /^─+$/ }))).toBeDefined()
   await pane.unmount()
 
   await ui.clock.advance(10 * 60_000)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('10 分鐘前 · 整理 Opus 5.5 · 偏題 ')
+  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('10 分鐘前 · 整理 Opus 5.5')
   await pane.unmount()
 
   await $.tool.call({ tool: MET, id: '1', evidence: '通過' } as never)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('剛剛 · 整理 Opus 5.5 · 偏題 ')
+  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('剛剛 · 整理 Opus 5.5')
   await pane.unmount()
 })
 
@@ -430,7 +430,7 @@ test('the language defaults to English and the choice is saved and applied', asy
   await seed($)
 
   let pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 60 }, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('just now · goals Opus 5.5 · drift ')
+  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('just now · goals Opus 5.5')
   expect((await pane.find({ type: 'Button', key: 'refresh-ai' }))?.text).toBe('↻ Refresh AI content')
   expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 English')
 
@@ -440,7 +440,7 @@ test('the language defaults to English and the choice is saved and applied', asy
   expect(store.get('settings:lang')).toEqual({ code: 'ja' })
 
   pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 60 }, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('たった今 · 整理 Opus 5.5 · 脱線 ')
+  expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('たった今 · 整理 Opus 5.5')
   expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 日本語')
   await pane.press({ key: 'lang' })
   await pane.press({ key: 'lang-custom' })
@@ -683,7 +683,7 @@ test('the drift check model is picked in the footer, saved for every session, an
   await pane.press({ key: 'drift-model' })
   expect((await pane.find({ type: 'Button', key: 'model-sonnet' }))?.text).toBe('Sonnet')
   await pane.press({ key: 'model-sonnet' })
-  expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('Sonnet')
+  expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('偏題 Sonnet')
   expect(await pane.find({ type: 'Button', key: 'model-opus' })).toBeUndefined()
   await pane.unmount()
   expect(store.get('settings:driftModel')).toBe('sonnet')
@@ -697,13 +697,13 @@ test('a drift model another session picks is used here; an unknown saved value f
   const store = engine(on, { 'settings:driftModel': 'gpt-9' })
   await seed($)
   let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('Haiku')
+  expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('偏題 Haiku')
   await pane.unmount()
 
   store.set('settings:driftModel', 'opus')
   await ui.clock.advance(2_000)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('Opus')
+  expect((await pane.find({ type: 'Button', key: 'drift-model' }))?.text).toBe('偏題 Opus')
   await pane.unmount()
 })
 
@@ -2385,3 +2385,83 @@ test('the scheme colors the progress bar and the pane background', async ($, on)
   expect((await pane.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
   await pane.unmount()
 })
+
+test('a background command that finished or was stopped leaves Also running', async ($, on) => {
+  engine(on)
+  let id = 0
+  const running = heldTools(on, e => (e.run_in_background ? { result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: `bg-${++id}` } } : { result: 'ok' }))
+  const quick = (call: Record<string, unknown>) => running(() => $.tool.call(call as never), async () => {})
+  const out: Record<string, string> = { '/tmp/t/bg-1.output': 'building…\n', '/tmp/t/bg-2.output': 'waiting…\n', '/tmp/t/bg-3.output': 'polling…\n' }
+  on('fs.read', (_, e) => {
+    const text = out[e.path]
+    if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
+    return { value: text } as never
+  })
+  await running(() => seed($), async () => {})
+  await quick({ tool: 'Bash', command: 'make app', description: 'build the app', run_in_background: true })
+  await quick({ tool: 'Bash', command: 'tail -f log', description: 'watch the log', run_in_background: true })
+  await quick({ tool: 'Bash', command: 'poll', description: 'poll the queue', run_in_background: true })
+  ui.messages = [
+    ASK,
+    {
+      role: 'assistant',
+      text: '',
+      toolUses: [1, 2, 3].map(n => ({ tool_use_id: `b${n}`, tool: 'Bash', input: {}, text: `Command running in background with ID: bg-${n}. Output is being written to: /tmp/t/bg-${n}.output.` })),
+    },
+  ]
+  for (const path of Object.keys(out)) ui.files[path] = 1
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+  const shown = async () => {
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const all = (await texts(pane)).join('\n')
+    await pane.unmount()
+    return ['build the app', 'watch the log', 'poll the queue'].filter(label => all.includes(label))
+  }
+  expect(await shown()).toEqual(['build the app', 'watch the log', 'poll the queue'])
+  // One exits, one is killed (no notification reaches the mod for either); one is stopped by hand.
+  out['/tmp/t/bg-1.output'] = 'building…\ndone\n\n[exited with code 0]\n'
+  out['/tmp/t/bg-2.output'] = 'waiting…\n\n[killed]\n'
+  ui.files['/tmp/t/bg-1.output'] = 2
+  ui.files['/tmp/t/bg-2.output'] = 2
+  ui.files['/tmp/t/bg-3.output'] = 2
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+  // The one still running stays.
+  expect(await shown()).toEqual(['poll the queue'])
+  await quick({ tool: 'TaskStop', task_id: 'bg-3' })
+  expect(await shown()).toEqual([])
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  const name =
+    surface === 'terminal'
+      ? 'the terminal pane draws in blocks too: each open request boxed, settings on their own line'
+      : 'on desktop the pane draws in blocks: each section its own column with a divider'
+  test(name, async ($, on) => {
+    engine(on)
+    await seed($)
+    await $.tool.call({ tool: ADD, intents: [{ summary: '草稿存檔', check: 'DraftSaveTests 通過', parent: '1' }] } as never)
+    const pane = await $.ui.mount({ ...PANE, surface })
+    // Each open request is its own bordered card, its parts inside it.
+    for (const id of ['1', '2']) {
+      const card = await pane.find({ type: 'Box', key: `card-${id}` })
+      expect(card?.props.borderStyle).toBe('round')
+      expect(card?.props.flexDirection).toBe('column')
+    }
+    expect((await pane.find({ type: 'Box', key: 'card-1' }))?.text).toContain('1a. 草稿存檔')
+    expect((await pane.find({ type: 'Box', key: 'card-1' }))?.text).not.toContain('不要動到同步')
+    // The footer: a divider, the times and models on one line, the settings together on the next.
+    expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('剛剛 · 整理 Opus 5.5')
+    const divider = (await pane.find({ type: 'Text', text: /^─+$/ })) ?? (await pane.findAll({ type: 'Svg' })).find(one => one.props.height === 1)
+    expect(divider).toBeDefined()
+    // (The innermost Box holding all four settings.)
+    const settings = (await pane.findAll({ type: 'Box' })).findLast(box =>
+      ['drift-model', 'observer', 'lang', 'scheme'].every(key => JSON.stringify(box.children).includes(`"key":"${key}"`)),
+    )
+    expect(settings?.props.flexDirection).toBe('row')
+    expect(settings?.text).not.toContain('Opus 5.5')
+    expect(settings?.text).not.toContain(' · ')
+    await pane.unmount()
+  })
+}

@@ -248,9 +248,20 @@ async function reconcile($: EngineInterface): Promise<void> {
       await update($, background, b => without(b, key))
       continue
     }
+    // A finished command's output ends with its exit line ("[exited with code 0]", "[killed]"): it is over,
+    // whether or not its notification reached this mod.
+    if (info.mtimeMs !== item.lastOutputAt) {
+      const text = info.size <= 4 * 1024 * 1024 ? await $.fs.read(path).catch(() => '') : ''
+      if (typeof text === 'string' && ENDED_OUTPUT.test(text.slice(-200))) {
+        await update($, background, b => without(b, key))
+        continue
+      }
+    }
     await update($, background, b => (b[key] ? { ...b, [key]: { ...b[key], path, lastOutputAt: info.mtimeMs } } : b))
   }
 }
+/** The last line Claude Code writes to a background command's output file when it ends. */
+const ENDED_OUTPUT = /\[(exited with code -?\d+|killed|terminated|timed out)[^\]]*\]\s*$/
 const without = <T,>(m: Record<string, T>, key: string): Record<string, T> => Object.fromEntries(Object.entries(m).filter(([k]) => k !== key))
 
 /** A short name for a background item: a subagent's description without its leading [tag], or the command. */
@@ -1794,6 +1805,10 @@ export const register: Register = on => {
     const table = $.ui.resolve(e)
     const { Box, Input } = table
     const pal = PALETTES[await read($, scheme)]
+    // The pane is laid out in blocks on every surface: a header (purpose, progress, what runs now), each open
+    // request a card, then what is done, the tools, and the footer (its settings on a line of their own).
+    // Spacing uses step names, which each surface sizes its own way.
+    const isDesk = e.surface !== 'terminal'
     // On a painted background every text and button label gets the scheme's own color: one left in the
     // surface's color (light text from a dark terminal) could vanish against it.
     type TextArgs = Parameters<typeof table.Text>[0]
@@ -1963,21 +1978,19 @@ export const register: Register = on => {
     const meta = [
       ...(lastAt === null ? [] : [ago(t, lastAt, Math.max(nowMs, lastAt))]),
       `${t.mainShort} ${mainModel}`,
-      `${t.driftShort} `,
     ].join(' · ')
     const footer = (
-      <Box flexDirection="column">
+      <Box flexDirection="column" gap="xs">
         {rule}
-        <Box flexDirection="row" flexWrap="wrap">
-          <Text dimColor wrap="wrap">{meta}</Text>
+        <Text dimColor wrap="wrap">{meta}</Text>
+        <Box flexDirection="row" flexWrap="wrap" gap={isDesk ? 'sm' : TOOLBAR_GAP}>
           <Button
             key="drift-model"
-            label={modelName(checker)}
+            label={`${t.driftShort} ${modelName(checker)}`}
             plain
             dimColor
             onPress={() => update($, editing, () => (isPickingModel ? null : 'model'))}
           />
-          <Text dimColor>{' · '}</Text>
           <Button
             key="observer"
             label={t.observerToggle(observing)}
@@ -1989,7 +2002,6 @@ export const register: Register = on => {
               await $.store.set(OBSERVER_KEY, next)
             }}
           />
-          <Text dimColor>{' · '}</Text>
           <Button
             key="lang"
             label={`🌐 ${langLabel(chosen)}`}
@@ -1997,7 +2009,6 @@ export const register: Register = on => {
             dimColor
             onPress={() => update($, editing, () => (isPicking ? null : 'lang'))}
           />
-          <Text dimColor>{' · '}</Text>
           <Button
             key="scheme"
             label={`◐ ${t.scheme[colors]}`}
@@ -2073,7 +2084,7 @@ export const register: Register = on => {
 
     if (list.length === 0 && !p.ai) {
       return (
-        <Box flexDirection="column" gap={1}>
+        <Box flexDirection="column" gap={isDesk ? 'lg' : 1}>
           <Text dimColor>{t.empty}</Text>
           {toolbar([startTool, closeTool])}
           {footer}
@@ -2295,7 +2306,7 @@ export const register: Register = on => {
         <Box key={`goal-${one.id}`} flexDirection="column">
           <Box flexDirection="row" gap={1}>
             {foldButton(one)}
-            <Text
+            {(text => <Box flexGrow={1} flexShrink={1}>{text}</Box>)(<Text
               bold={!one.parent && !isFinished}
               color={isFinished ? pal.done : isWorking ? pal.now : one.isStale || one.isAuto ? pal.warn : undefined}
               wrap="wrap"
@@ -2305,7 +2316,7 @@ export const register: Register = on => {
               {parts.length > 0 ? ` ${metParts}/${parts.length}` : ''}
               {tags.length > 0 ? t.paren(tags.join(' · ')) : ''}
               {now$ ? `  ${t.nowLabel}${t.colon}${t.stage[now$]}` : ''}
-            </Text>
+            </Text>)}
             {itemTools(one)}
           </Box>
           {one.mine && edit !== one.id && (
@@ -2439,15 +2450,24 @@ export const register: Register = on => {
       )
 
     return (
-      <Box flexDirection="column" gap={1}>
-        <Box flexDirection="column">
+      <Box flexDirection="column" gap={isDesk ? 'lg' : 1}>
+        <Box flexDirection="column" gap={isDesk ? 'sm' : 0}>
           {purposeBlock}
           {counted.total > 0 && progressBar}
           {stageLine}
           {backgroundBlock}
         </Box>
         {driftBox}
-        {openRequests.map(one => goalRow(one, ''))}
+        {openRequests.length > 0 && (
+          // Each open request its own card, its parts inside it.
+          <Box flexDirection="column" gap="sm">
+            {openRequests.map(one => (
+              <Box key={`card-${one.id}`} flexDirection="column" borderStyle="round" borderDimColor paddingX="sm">
+                {goalRow(one, '')}
+              </Box>
+            ))}
+          </Box>
+        )}
         {doneGroup}
         {removedGroup}
         {clearRow}

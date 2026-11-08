@@ -7,15 +7,23 @@ A Claude Code mod: a side pane, **Goals**, that shows in plain words what you as
 ```
 Fix disappearing drafts                      ✎
 ▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 1/3
-> ◐ 1. Drafts never disappear 1/3          ✎ ✕ ⋯
-    ● 1b. Drafts survive switching notebooks  now: testing
-    ○ 1c. Sync still works
-- ○ 2. The desktop app works too           ✎ ✕ ⋯
 Also running
   Background command "unit suite": testing
+
+╭──────────────────────────────────────────╮
+│ > ◐ 1. Drafts never disappear 1/3  ✎ ✕ ⋯ │
+│     ● 1b. Drafts survive switching       │
+│           notebooks  now: testing        │
+│     ○ 1c. Sync still works               │
+╰──────────────────────────────────────────╯
+╭──────────────────────────────────────────╮
+│ - ○ 2. The desktop app works too   ✎ ✕ ⋯ │
+╰──────────────────────────────────────────╯
+
 ✓ 4 done ▸
 ────────────────────────────────────────────
-2 min ago · goals Opus · drift Haiku · observer: on · 🌐 English · ◐ dark
+2 min ago · goals Opus
+drift Haiku  observer: on  🌐 English  ◐ dark
 ```
 
 **Marks**
@@ -44,7 +52,7 @@ Also running
 
 **Now** (beside a ● part, or under the progress bar): *plan*, *investigate*, *editing*, *building*, *test*, *fix* (editing after a failed test), *review*, *thinking* (between tools), *waiting for your answer*, *waiting for your approval*. Nothing shows once the turn is over. **Also running** lists background commands and subagents until they really end.
 
-**Buttons**: ✎ write an item in your own words (yours lead) · ✕ cancel it · ⋯ the words that asked for it and its evidence · ▶ start (build the list from the conversation) · ↻ refresh the AI side · ⌫ clear the list (two presses) · ✕ close (`/intents` reopens). Footer: the drift model (Haiku, Sonnet or Opus), *observer: on/off*, 🌐 language (English, 中文, 日本語 or your own), ◐ colors (auto keeps your terminal's own look; dark or light paint the pane's background and give its text, buttons and progress bar colors that read on it).
+**Buttons**: ✎ write an item in your own words (yours lead) · ✕ cancel it · ⋯ the words that asked for it and its evidence · ▶ start (build the list from the conversation) · ↻ refresh the AI side · ⌫ clear the list (two presses) · ✕ close (`/intents` reopens). Each open request is a card of its own, in the terminal and in the desktop app alike. Footer: when it last changed and the model that writes the list, then the settings on their own line: the drift model (Haiku, Sonnet or Opus), *observer: on/off*, 🌐 language (English, 中文, 日本語 or your own), ◐ colors (auto keeps your terminal's own look; dark or light paint the pane's background and give its text, buttons and progress bar colors that read on it).
 
 ## How it works
 
