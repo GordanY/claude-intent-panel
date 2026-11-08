@@ -10,6 +10,10 @@ A Claude Code mod that keeps a side pane, **🎯 Goals**, showing in plain words
 
 - **Language**: English by default. Pick 🌐 at the bottom of the pane: English, 中文, 日本語, or type your own. The choice is saved on your machine for every worktree and session. It sets the pane's labels (a custom language keeps English labels) and the language Claude writes the purpose, goals, checks, evidence and drift notes in. Text already written stays as it is until you press ↻.
 
+## Where it runs
+
+Only in sessions a person can see. A headless session (`claude -p`, the SDK, automation that runs Claude without a REPL) gets no pane, no instructions, no tools and no drift check. Subagents and teammates cannot change the main conversation's list. An interactive session another tool opens for you in a terminal is an ordinary session and does get the pane.
+
 ## Install
 
 At the prompt of a terminal session:

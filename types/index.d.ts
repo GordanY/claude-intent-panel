@@ -38,6 +38,8 @@ declare module 'claude-code' {
       now: number
       /** The pane's language, loaded from $.store at session start. */
       lang: Lang
+      /** A person can see this session (not `-p`, not the SDK): the mod acts only then. */
+      isActive: boolean
     }
   }
 }

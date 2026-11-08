@@ -35,6 +35,19 @@ const now = atom({ plugin: 'intent-tracker', key: 'now' } as const, 0)
 /** The person's language choice: saved in $.store, shared by every worktree and session. */
 const lang = atom({ plugin: 'intent-tracker', key: 'lang' } as const, DEFAULT_LANG as Lang)
 const LANG_KEY = 'settings:lang'
+/**
+ * Whether this session has a person who can see the pane: false for a `-p`
+ * run, the SDK and other headless sessions, where the mod stays out of the way
+ * (no instructions, no tools, no drift check).
+ */
+const isActive = atom({ plugin: 'intent-tracker', key: 'isActive' } as const, true)
+
+/** A subagent's (or teammate's) call: only the main conversation edits the list. */
+function fromSubagent(e: unknown): boolean {
+  const agentId = (e as { agentId?: unknown }).agentId
+  return typeof agentId === 'string' && agentId !== ''
+}
+const SUBAGENT_DENY = 'Only the main conversation updates the intent pane; leave it to the main agent.'
 
 /** The model the drift check runs on (the session's own model does the rest). */
 const DRIFT_MODEL = 'haiku'
@@ -317,6 +330,8 @@ async function checkDrift($: EngineInterface): Promise<void> {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    await update($, isActive, () => e.isInteractive)
+    if (!e.isInteractive) return next(e)
     for (const spec of toolSpecs) await $.tool.register(spec)
     const chosen = asLang(await $.store.get(LANG_KEY))
     await update($, lang, () => chosen)
@@ -351,6 +366,9 @@ export const register: Register = on => {
 
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
+    // Only where a person can see the pane: not headless, not a teammate's prompt.
+    const isShown = (await read($, isActive)) && e.surfaces.length > 0 && !e.traits.includes('teammate')
+    if (!isShown) return composed
 
     return {
       sections: [
@@ -363,7 +381,7 @@ export const register: Register = on => {
   // The list reaches the model beside the next prompt after the person edits
   // their words, or when it was carried over from an earlier session.
   on('prompt.submit', async ($, e, next) => {
-    if (e.command || e.isMeta) return next(e)
+    if (e.command || e.isMeta || !(await read($, isActive))) return next(e)
     await sync($)
     if (!(await read($, isDirty))) return next(e)
     const block = `<intent-pane>\nThe intent pane for this worktree (the person's words are authoritative). Current list:\n${listText(
@@ -376,6 +394,7 @@ export const register: Register = on => {
   })
 
   on('tool.call', { tool: 'mcp__intent-tracker__intent_add' }, async ($, e) => {
+    if (fromSubagent(e)) return { deny: SUBAGENT_DENY }
     await sync($)
     const args = e as unknown as Record<string, unknown>
     const given = Array.isArray(args.intents) ? (args.intents as Record<string, unknown>[]) : []
@@ -405,6 +424,7 @@ export const register: Register = on => {
   })
 
   on('tool.call', { tool: 'mcp__intent-tracker__intent_met' }, async ($, e) => {
+    if (fromSubagent(e)) return { deny: SUBAGENT_DENY }
     await sync($)
     const args = e as unknown as Record<string, unknown>
     const id = str(args.id)
@@ -420,6 +440,7 @@ export const register: Register = on => {
   })
 
   on('tool.call', { tool: 'mcp__intent-tracker__intent_revise' }, async ($, e) => {
+    if (fromSubagent(e)) return { deny: SUBAGENT_DENY }
     await sync($)
     const args = e as unknown as Record<string, unknown>
     const id = str(args.id)
@@ -450,7 +471,7 @@ export const register: Register = on => {
   // After each main-loop turn, a cheap model checks the turn against the list.
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
-    if (!e.agentId && e.reason === 'answer') {
+    if (!e.agentId && e.reason === 'answer' && (await read($, isActive))) {
       $.clock.after(0, () => {
         void checkDrift($).catch(() => undefined)
       })

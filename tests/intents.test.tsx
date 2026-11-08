@@ -28,7 +28,7 @@ const SAVED = {
 }
 
 /** Panes the engine holds open, and how many times the mod opened one. */
-const ui = { up: new Set<string>(), opens: 0, clock: null as unknown as ReturnType<typeof mock.clock> }
+const ui = { up: new Set<string>(), opens: 0, registered: 0, clock: null as unknown as ReturnType<typeof mock.clock> }
 
 /** The engine beneath the mod; `dirs` are the folders that exist. */
 function engine(
@@ -49,7 +49,11 @@ function engine(
     return { value: undefined }
   })
   on('store.keys', () => ({ value: [...store.keys()] }))
-  on('tool.register', () => ({ value: {} }))
+  ui.registered = 0
+  on('tool.register', () => {
+    ui.registered += 1
+    return { value: {} }
+  })
   on('command.register', () => ({ value: { command: 'intents' } }))
   ui.up.clear()
   ui.opens = 0
@@ -411,4 +415,65 @@ test('a saved language choice is read back by a new session', async ($, on) => {
   await pane.press({ key: 'start' })
   await pane.unmount()
   expect(submitted.some(t => t.startsWith('（目標パネル）') && t.includes('日本語'))).toBe(true)
+})
+
+const COMPOSE = {
+  model: 'claude-opus-5-5',
+  promptModel: 'claude-opus-5-5',
+  surfaces: ['terminal'],
+  tools: [],
+  outputStyle: null,
+  traits: [],
+}
+
+test('a headless session (-p, SDK) gets no tools, no instructions, no drift check', async ($, on) => {
+  const store = engine(on)
+  let modelCalls = 0
+  on('model.complete', () => {
+    modelCalls += 1
+    return { value: { isAnswered: true, text: '{"onTrack": true}', usage: {} } }
+  })
+  on('prompt.compose', () => ({ sections: [] }))
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('session.messages', () => ({ value: [{ role: 'user', text: '做事', toolUses: [] }, { role: 'assistant', text: '好', toolUses: [] }] }))
+  await $.session.start({ cwd: ROOT, surface: null, isInteractive: false } as never)
+
+  expect(ui.registered).toBe(0)
+  expect(ui.up.has('intents')).toBe(false)
+  const composed = await $.prompt.compose({ ...COMPOSE, surfaces: [], traits: ['print'] } as never)
+  expect(JSON.stringify(composed)).not.toContain('Intent pane')
+  const submitted = await $.prompt.submit({ text: 'run the task' })
+  expect('context' in submitted && (submitted.context ?? []).length).toBe(0)
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+  expect(modelCalls).toBe(0)
+  expect(store.has(`wt:${ROOT}`)).toBe(false)
+})
+
+test('an interactive session gets the instructions; a teammate prompt or one with no surface does not', async ($, on) => {
+  engine(on)
+  on('prompt.compose', () => ({ sections: [] }))
+  await start($)
+
+  expect(ui.registered).toBe(4)
+  expect(JSON.stringify(await $.prompt.compose(COMPOSE as never))).toContain('Intent pane')
+  expect(JSON.stringify(await $.prompt.compose({ ...COMPOSE, traits: ['teammate'] } as never))).not.toContain('Intent pane')
+  expect(JSON.stringify(await $.prompt.compose({ ...COMPOSE, surfaces: [] } as never))).not.toContain('Intent pane')
+})
+
+test("a subagent cannot change the main conversation's list", async ($, on) => {
+  const store = engine(on)
+  await seed($)
+  const before = JSON.stringify(store.get(`wt:${ROOT}`))
+
+  for (const call of [
+    { tool: ADD, agentId: 'sub-1', intents: [{ summary: '子任務', check: '看到' }] },
+    { tool: MET, agentId: 'sub-1', id: '1', evidence: '我說過了' },
+    { tool: 'mcp__intent-tracker__intent_revise', agentId: 'sub-1', id: '1', summary: '改掉' },
+  ]) {
+    const result = await $.tool.call(call as never)
+    expect('deny' in result && typeof result.deny === 'string').toBe(true)
+  }
+  expect(JSON.stringify(store.get(`wt:${ROOT}`))).toBe(before)
 })
