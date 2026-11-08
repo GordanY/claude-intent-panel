@@ -71,8 +71,14 @@ export function movePart(list: readonly Intent[], id: string, position: number):
   return rest
 }
 
+/** The next request number: requests count 1, 2, 3… (older lists' numeric part ids are skipped over). */
 export function nextId(list: readonly Intent[]): number {
   return list.reduce((max, one) => Math.max(max, Number(one.id) || 0), 0) + 1
+}
+
+/** The next part id ("p1", "p2"…): parts have their own ids, so they never use up a request number. */
+export function nextPartId(list: readonly Intent[]): number {
+  return list.reduce((max, one) => Math.max(max, /^p\d+$/.test(one.id) ? Number(one.id.slice(1)) : 0), 0) + 1
 }
 
 export function withHistory(one: Intent, entry: HistoryEntry): Intent {

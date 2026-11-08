@@ -17,6 +17,7 @@ import {
   kindOf,
   listText,
   nextId,
+  nextPartId,
   normalize,
   midTurnTexts,
   partsOf,
@@ -222,6 +223,8 @@ async function setNow($: EngineInterface, agentId: string | undefined, step: Sta
 const stage = atom({ plugin: 'intent-tracker', key: 'stage' } as const, NO_STAGE as Stage, { shape: 'stage-1' })
 /** The item whose details (source, evidence) the pane shows; one at a time. */
 const shownDetails = atom({ plugin: 'intent-tracker', key: 'shownDetails' } as const, null as string | null)
+/** Requests whose finished parts the pane shows (folded under the request by default). */
+const expanded = atom({ plugin: 'intent-tracker', key: 'expanded' } as const, [] as string[])
 /** Whether the finished goals are expanded in the pane (folded by default). */
 const isDoneOpen = atom({ plugin: 'intent-tracker', key: 'isDoneOpen' } as const, false)
 
@@ -816,12 +819,13 @@ async function checkTurn($: EngineInterface, durationMs = 0, mode: 'turn' | 'res
       })
       for (const c of cancels) next = close(next, c.id, { as: 'cancelled', reason: c.quote, by: 'person', at, isAuto: true })
       let n = nextId(next)
+      let pn = nextPartId(next)
       const fresh = (m: Quoted): Intent => {
         // A small follow-up to a live goal request goes under it, with the person's words.
         const parentId = m.parent ? resolveId(next, m.parent) : undefined
         const parent = parentId ? next.find(one => one.id === parentId && isLive(one) && isRequest(one) && kindOf(one) === 'goal') : undefined
         return {
-          id: String(n++),
+          id: parent ? `p${pn++}` : String(n++),
           ai: m.summary,
           mine: '',
           check: m.check,
@@ -998,7 +1002,8 @@ export const register: Register = on => {
     const given = Array.isArray(args.intents) ? (args.intents as Record<string, unknown>[]) : []
     const newPurpose = str(args.purpose)
     const list = await read($, intents)
-    const first = nextId(list)
+    let requestNumber = nextId(list)
+    let partNumber = nextPartId(list)
     const items = given
       .map(g => ({
         summary: str(g.summary),
@@ -1009,9 +1014,11 @@ export const register: Register = on => {
         replaces: str(g.replaces),
       }))
       .filter(g => g.summary)
-      .map((g, n) => ({ ...g, id: String(first + n) }))
+      // Requests take the next numbers; parts their own ids, so request numbers run on without gaps.
+      .map(g => ({ ...g, id: g.parent ? `p${partNumber++}` : String(requestNumber++) }))
     // "+N" names the Nth item of this same call, so a request and its parts go in together.
-    const parentOf = (ref: string) => (/^\+\d+$/.test(ref) ? String(first + Number(ref.slice(1)) - 1) : (resolveId(list, ref) ?? ref))
+    const parentOf = (ref: string) =>
+      /^\+\d+$/.test(ref) ? (items[Number(ref.slice(1)) - 1]?.id ?? ref) : (resolveId(list, ref) ?? ref)
     const kindOfRequest = (id: string): 'goal' | 'limit' | undefined => {
       const fresh = items.find(item => item.id === id && !item.parent)
       if (fresh) return fresh.kind
@@ -1070,6 +1077,14 @@ export const register: Register = on => {
             : { kind: item.kind, source: item.source }),
         }
         next.push(added)
+        // The observer already recorded these same words (unconfirmed): Claude's entry takes its place.
+        if (item.source) {
+          const words = normalize(item.source)
+          const twin = next.find(
+            one => one.id !== item.id && one.isAuto && !one.isMet && isLive(one) && one.source && (normalize(one.source).includes(words) || words.includes(normalize(one.source))),
+          )
+          if (twin) next = close(next, twin.id, { as: 'replaced', reason: 'recorded again by Claude', by: 'claude', at, replacedBy: item.id })
+        }
         const old = item.replaces ? resolveId(current, item.replaces) : undefined
         if (old) {
           // The parts that still apply carry over to the new request; Claude cancels the rest.
@@ -1153,7 +1168,8 @@ export const register: Register = on => {
       if (args.reopen === true && kindOf(one) === 'limit') return { deny: `Item ${id} is a limit; use holding: true.` }
       const isPartOnly = args.active !== undefined || args.agent !== undefined || args.position !== undefined
       if (isPartOnly && (isRequest(one) || one.closed)) return { deny: 'active, agent and position are for live parts.' }
-      if (cancel && isRequest(one) && !said(await heard($), cancel)) {
+      // A request the observer recorded (unconfirmed) Claude may withdraw; any other only on the person's word.
+      if (cancel && isRequest(one) && !one.isAuto && !said(await heard($), cancel)) {
         return {
           deny: `A request is cancelled only on the person's word: they never said "${cancel}". Quote their words exactly; if they did not drop it, leave it.`,
         }
@@ -1368,6 +1384,14 @@ export const register: Register = on => {
     const mainModel = modelName(await $.session.model().catch(() => t.mainSession))
     const columns = e.props.bodyColumns ?? 40
     const details = await read($, shownDetails)
+    const opened = new Set(await read($, expanded))
+    const toggleOpen = (id: string) => update($, expanded, list => (list.includes(id) ? list.filter(x => x !== id) : [...list, id]))
+    /** ▸ / ▾ before a request with finished parts: shows or folds them. */
+    const foldButton = (one: Intent) => {
+      const doneParts = partsOf(list, one.id).filter(part => part.isMet).length
+      if (one.parent || doneParts === 0) return null
+      return <Button key={`fold-${one.id}`} label={opened.has(one.id) ? '▾' : '▸'} plain dimColor onPress={() => toggleOpen(one.id)} />
+    }
     const where = await read($, stage)
     const live = list.filter(isLive)
     // Goal requests (and any part left without its request) lead; limits sit apart.
@@ -1780,6 +1804,7 @@ export const register: Register = on => {
       return (
         <Box key={`goal-${one.id}`} flexDirection="column">
           <Box flexDirection="row" gap={1}>
+            {foldButton(one)}
             <Text
               bold={!one.parent && !isFinished}
               color={isFinished ? 'green' : isWorking ? 'cyan' : one.isStale || one.isAuto ? 'yellow' : undefined}
@@ -1814,7 +1839,7 @@ export const register: Register = on => {
           )}
           {cancelRow(one)}
           {detailsBlock(one, indent)}
-          {parts.map(part => goalRow(part, `${indent}  `))}
+          {parts.filter(part => !part.isMet || opened.has(one.id)).map(part => goalRow(part, `${indent}  `))}
         </Box>
       )
     }
@@ -1879,6 +1904,7 @@ export const register: Register = on => {
             return (
               <Box key={`done-${one.id}`} flexDirection="column">
                 <Box flexDirection="row" gap={1}>
+                  {foldButton(one)}
                   <Text color="green" wrap="wrap">
                     ✓ {one.id}. {one.mine || one.ai}
                     {isSeen ? t.paren(t.seenInOutput) : ''}
@@ -1891,9 +1917,9 @@ export const register: Register = on => {
                     onPress={() => update($, shownDetails, v => (v === one.id ? null : one.id))}
                   />
                 </Box>
-                {parts.map(part => (
+                {(opened.has(one.id) ? parts : []).map(part => (
                   <Box key={`done-part-${part.id}`}>
-                    <Text dimColor wrap="wrap">
+                    <Text color="green" wrap="wrap">
                       {'  '}✓ {labelOf(list, part)}. {part.mine || part.ai}
                       {part.isAuto ? t.paren(t.seenInOutput) : ''}
                     </Text>

@@ -869,11 +869,14 @@ test('a request breaks into parts; progress counts the parts and the request is 
   const direct = await $.tool.call({ tool: MET, id: '1', evidence: '好了' } as never)
   expect('deny' in direct && (direct.deny ?? "").includes('has parts')).toBe(true)
   // A part never quotes; a part of a part is refused.
-  const nested = await $.tool.call({ tool: ADD, intents: [{ summary: '更細', check: 'x', parent: '2' }] } as never)
+  const nested = await $.tool.call({ tool: ADD, intents: [{ summary: '更細', check: 'x', parent: '1a' }] } as never)
   expect('deny' in nested).toBe(true)
 
-  await $.tool.call({ tool: MET, id: '2', evidence: 'DraftPersistTests 3/3' } as never)
+  await $.tool.call({ tool: MET, id: '1a', evidence: 'DraftPersistTests 3/3' } as never)
   let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // Finished parts fold under their request until ▸ opens them.
+  expect((await texts(pane)).some(x => x.includes('1a. 關掉 app 後草稿還在'))).toBe(false)
+  await pane.press({ key: 'fold-1' })
   let shown = await texts(pane)
   expect(shown.some(x => x.endsWith(' 1/2') && /[▓░]/.test(x))).toBe(true)
   expect(shown).toContain('◐ 1. 草稿不再消失 1/2')
@@ -881,12 +884,13 @@ test('a request breaks into parts; progress counts the parts and the request is 
   expect(shown).toContain('  ○ 1b. 切換筆記本後草稿還在')
   await pane.unmount()
 
-  await $.tool.call({ tool: MET, id: '3', evidence: 'SwitchTests 2/2' } as never)
+  await $.tool.call({ tool: MET, id: '1b', evidence: 'SwitchTests 2/2' } as never)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await pane.find({ type: 'Button', key: 'done-toggle' }))?.text).toBe('✓ 已完成 1 項 ▸')
   await pane.unmount()
   const saved = store.get(`wt:${ROOT}`) as { intents: { id: string; parent?: string; source?: string }[] }
-  expect(saved.intents.find(one => one.id === '2')?.parent).toBe('1')
+  // Parts have their own ids: request numbers are not used up by them.
+  expect(saved.intents.find(one => one.id === 'p1')?.parent).toBe('1')
   expect(saved.intents.find(one => one.id === '1')?.source).toBe('修好草稿消失的問題')
 })
 
@@ -937,7 +941,7 @@ test('a dropped request is cancelled only on the person\'s words, takes its part
 
   let saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
   expect(saved.intents.find(one => one.id === '1')?.closed?.by).toBe('person')
-  expect(saved.intents.find(one => one.id === '2')?.closed?.isCascade).toBe(true)
+  expect(saved.intents.find(one => one.id === 'p1')?.closed?.isCascade).toBe(true)
   // The pane shows the latest only: the cancelled request and its part are gone from it.
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const shown = await texts(pane)
@@ -1111,6 +1115,7 @@ test('several parts can be worked on at once, each showing its own activity; a s
   await pane.unmount()
   await $.tool.call({ tool: MET, id: '1a', evidence: '3/3' } as never)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'fold-1' })
   expect(await texts(pane)).toContain('  ✓ 1a. 關掉 app 後草稿還在')
   await pane.unmount()
 })
@@ -1183,9 +1188,10 @@ test('a result wakes the observer: it ticks what the output shows and flags a pa
   expect(prompts[0]).not.toContain('drift')
   const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
   // Counted at once: evidence-quoted, no confirming needed.
-  expect(saved.intents.find(one => one.id === '2')).toMatchObject({ isMet: true, isAuto: true })
-  expect(saved.intents.find(one => one.id === '3')?.isStale).toBe(true)
+  expect(saved.intents.find(one => one.id === 'p1')).toMatchObject({ isMet: true, isAuto: true })
+  expect(saved.intents.find(one => one.id === 'p2')?.isStale).toBe(true)
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'fold-1' })
   const shown = await texts(pane)
   expect(shown).toContain('  ✓ 1a. 關掉 app 後草稿還在（從輸出看到）')
   expect(shown).toContain('  ○ 1b. 切換筆記本後草稿還在（可能過時）')
@@ -1193,7 +1199,7 @@ test('a result wakes the observer: it ticks what the output shows and flags a pa
 
   // Claude re-plans the stale part: the flag clears.
   await $.tool.call({ tool: REVISE, id: '1b', summary: '存檔時機正確，草稿不會掉' } as never)
-  expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.find(one => one.id === '3')?.isStale).toBe(false)
+  expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.find(one => one.id === 'p2')?.isStale).toBe(false)
 })
 
 test('a changed request carries the parts that still apply to the new one', async ($, on) => {
@@ -1205,7 +1211,7 @@ test('a changed request carries the parts that still apply to the new one', asyn
     intents: [{ summary: '草稿自動存雲端', check: 'y', source: '草稿要自動存到雲端', replaces: '1' }],
   } as never)
   const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
-  expect(saved.intents.filter(one => one.parent === '5' && !one.closed).length).toBe(3)
+  expect(saved.intents.filter(one => one.parent === '2' && !one.closed).length).toBe(3)
 })
 
 test('the status is live: each tool shows its stage while it runs, thinking between tools, nothing once the turn ends', async ($, on) => {
@@ -1447,7 +1453,7 @@ test("a small follow-up to a request goes under it with the person's words, and 
   await $.tool.call({ tool: ADD, intents: [{ summary: '當機後草稿還在', check: 'CrashTests', parent: '1', source: '草稿也要在當機後保留' }] } as never)
 
   const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
-  expect(saved.intents.find(one => one.id === '3')).toMatchObject({ parent: '1', source: '草稿也要在當機後保留' })
+  expect(saved.intents.find(one => one.id === 'p1')).toMatchObject({ parent: '1', source: '草稿也要在當機後保留' })
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const shown = await texts(pane)
   // Request 1 is open again: its follow-up is not done.
@@ -1523,4 +1529,61 @@ test('a wrong id is refused with a short key of the items, and an add says which
   expect('result' in added && String(added.result).startsWith('Added: 1, 1a, 1b')).toBe(true)
   const wrong = await $.tool.call({ tool: MET, id: '2a', evidence: 'x' } as never)
   expect('deny' in wrong && wrong.deny).toBe('No item "2a". Items (parts by label): 1 (1a, 1b)')
+})
+
+test('finished parts fold under their request (▸ opens them) and show green; request numbers run on without gaps', async ($, on) => {
+  const store = engine(on)
+  await seedParts($)
+  await $.tool.call({ tool: MET, id: '1a', evidence: 'ok' } as never)
+  // The next request is 2: its parts did not use up numbers.
+  ui.messages = [...ui.messages, { role: 'user', text: '桌面版也要能用', toolUses: [] }]
+  await $.tool.call({ tool: ADD, intents: [{ summary: '桌面版可用', check: 'x', source: '桌面版也要能用' }] } as never)
+  expect((store.get(`wt:${ROOT}`) as { intents: Intent[] }).intents.some(one => one.id === '2' && !one.parent)).toBe(true)
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  let shown = await texts(pane)
+  expect(shown).toContain('◐ 1. 草稿不再消失 1/3')
+  expect(shown.some(x => x.includes('1a.'))).toBe(false)
+  expect(shown).toContain('  ○ 1b. 切換筆記本後草稿還在')
+  expect((await pane.find({ type: 'Button', key: 'fold-1' }))?.text).toBe('▸')
+  await pane.press({ key: 'fold-1' })
+  shown = await texts(pane)
+  expect(shown).toContain('  ✓ 1a. 關掉 app 後草稿還在')
+  expect((await pane.find({ type: 'Text', text: /1a\. 關掉/ }))?.props.color).toBe('green')
+  await pane.press({ key: 'fold-1' })
+  expect((await texts(pane)).some(x => x.includes('1a.'))).toBe(false)
+  await pane.unmount()
+})
+
+test("Claude recording words the observer already recorded takes that entry's place; an unconfirmed auto entry can be withdrawn without a quote", async ($, on) => {
+  const store = engine(on)
+  on('ui.toast', () => ({ value: undefined }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({
+    value: {
+      isAnswered: true,
+      text: JSON.stringify({
+        onTrack: true,
+        add: [
+          { quote: '完成的分項要變綠色', kind: 'goal', summary: '分項變綠', check: 'x' },
+          { quote: '匯出要能選頁', kind: 'goal', summary: '選頁匯出', check: 'y' },
+        ],
+      }),
+      usage: USAGE,
+    },
+  }))
+  await seed($)
+  setMessages(() => ({ value: [{ role: 'user', text: '完成的分項要變綠色，匯出要能選頁', toolUses: [] }, { role: 'assistant', text: '好', toolUses: [] }] }))
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await ui.clock.settle()
+
+  await $.tool.call({ tool: ADD, intents: [{ summary: '完成的分項變綠', check: 'z', parent: '1', source: '完成的分項要變綠色' }] } as never)
+  let saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
+  expect(saved.intents.find(one => one.ai === '分項變綠')?.closed).toMatchObject({ as: 'replaced', replacedBy: 'p1' })
+  // Not the person's word, but an unconfirmed auto entry: Claude may withdraw it.
+  const auto = saved.intents.find(one => one.ai === '選頁匯出') as Intent
+  const withdrawn = await $.tool.call({ tool: REVISE, id: auto.id, cancel: '重複' } as never)
+  expect('deny' in withdrawn).toBe(false)
+  saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
+  expect(saved.intents.find(one => one.id === auto.id)?.closed?.as).toBe('cancelled')
 })

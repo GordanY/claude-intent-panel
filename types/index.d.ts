@@ -143,6 +143,8 @@ declare module 'claude-code' {
       heardSaid: { text: string; at: number }[]
       /** The item whose details (source, history) are shown; one at a time. */
       shownDetails: string | null
+      /** Requests whose finished parts are shown (folded by default). */
+      expanded: string[]
       /** The finished goals are expanded in the pane. */
       isDoneOpen: boolean
     }
