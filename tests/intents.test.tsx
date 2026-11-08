@@ -2798,3 +2798,30 @@ test('on desktop each divider is a visible full-width line', async ($, on) => {
   }
   await pane.unmount()
 })
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the pane paints its own background in dark or light, so its text never sits on the surface's opposite color (${surface})`, async ($, on) => {
+    engine(on)
+    await seed($)
+    const page = async () => {
+      const pane = await $.ui.mount({ ...PANE, surface })
+      const box = await pane.find({ type: 'Box', key: 'page' })
+      await pane.unmount()
+      return box?.props.backgroundColor
+    }
+    // Auto: the surface's own look.
+    expect(await page()).toBeUndefined()
+    let pane = await $.ui.mount({ ...PANE, surface })
+    await pane.press({ key: 'scheme' })
+    await pane.press({ key: 'scheme' })
+    await pane.unmount()
+    // Light, even where the surface keeps its dark background: the page itself is light under the dark text.
+    expect(await page()).toBe('#f6f8fa')
+    pane = await $.ui.mount({ ...PANE, surface })
+    expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.props.color).toBe('#1f2328')
+    await pane.press({ key: 'scheme' })
+    await pane.press({ key: 'scheme' })
+    await pane.unmount()
+    expect(await page()).toBe('#1e1f22')
+  })
+}

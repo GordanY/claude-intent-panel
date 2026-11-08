@@ -1863,7 +1863,15 @@ export const register: Register = on => {
     // above the prompt, it stays as tall as its content.
     const fill = e.props.placement === 'dock' && e.props.scroll?.bodyRows ? e.props.scroll.bodyRows : undefined
     const page = (top: JSX.Element, bottom: JSX.Element) => (
-      <Box key="page" flexDirection="column" justifyContent="space-between" {...(fill ? { minHeight: fill } : {})}>
+      <Box
+        key="page"
+        flexDirection="column"
+        justifyContent="space-between"
+        {...(fill ? { minHeight: fill } : {})}
+        // Dark or light: the page paints its own background too. The pane's own background is a request a surface
+        // may not grant (the desktop app in its dark mode keeps its own), and dark text on it would vanish.
+        {...(pal.background ? { backgroundColor: pal.background, ...(isDesk ? { padding: 'sm' as const } : {}) } : {})}
+      >
         {top}
         {bottom}
       </Box>
