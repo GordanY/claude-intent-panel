@@ -2912,3 +2912,57 @@ test("background commands a subagent starts leave when their output ends, read f
   await ui.clock.settle()
   expect(await shown()).toEqual([])
 })
+
+test('a background command whose owner no agent list names (a workflow agent, an engine fork) stays until its own end: its exit line or its notification', async ($, on) => {
+  engine(on)
+  let id = 0
+  on('tool.call', (_, e) =>
+    ((e as { run_in_background?: boolean }).run_in_background
+      ? { result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: `bg-${++id}` } }
+      : { result: 'ok' }) as never,
+  )
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  const out: Record<string, string> = { '/tmp/t/bg-1.output': 'linting…\n' }
+  on('fs.read', (_, e) => {
+    const text = out[e.path]
+    if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
+    return { value: text } as never
+  })
+  await seed($)
+  // Another subagent is listed; the workflow agent that starts the commands never is.
+  ui.agents = [{ id: 'ag-other', description: 'scan the docs', type: 'Explore', status: 'running' }]
+  await $.tool.call({ tool: 'Bash', command: 'bash scripts/premerge_gate.sh --lints-only', description: '[shell] lints on the candidate', run_in_background: true, agentId: 'wf-1' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'xcodebuild build-for-testing', description: '[shell] build the candidate', run_in_background: true, agentId: 'wf-1' } as never)
+  ui.agentMessages['wf-1'] = [
+    {
+      role: 'assistant',
+      text: '',
+      toolUses: [{ tool_use_id: 'w1', tool: 'Bash', input: {}, text: 'Command running in background with ID: bg-1. Output is being written to: /tmp/t/bg-1.output.' }],
+    },
+  ]
+  ui.files['/tmp/t/bg-1.output'] = 1
+  const shown = async () => {
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const all = (await texts(pane)).join('\n')
+    await pane.unmount()
+    return ['lints on the candidate', 'build the candidate'].filter(label => all.includes(label))
+  }
+  // Tick after tick, an owner never listed is not taken for an ended one.
+  for (let tick = 0; tick < 4; tick += 1) {
+    await ui.clock.advance(5_000)
+    await ui.clock.settle()
+  }
+  expect(await shown()).toEqual(['lints on the candidate', 'build the candidate'])
+  // The first one's output ends with its exit line (its path read from the owner's transcript).
+  out['/tmp/t/bg-1.output'] = 'linting…\nok\n\n[exited with code 0]\n'
+  ui.files['/tmp/t/bg-1.output'] = 2
+  await ui.clock.advance(5_000)
+  await ui.clock.settle()
+  expect(await shown()).toEqual(['build the candidate'])
+  // The second one's notification arrives.
+  await $.prompt.submit({
+    text: '<task-notification>\n<task-id>bg-2</task-id>\n<status>completed</status>\n</task-notification>',
+    origin: { kind: 'task-notification' },
+  } as never)
+  expect(await shown()).toEqual([])
+})

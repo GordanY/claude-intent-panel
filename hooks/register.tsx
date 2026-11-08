@@ -169,11 +169,12 @@ const activity = atom({ plugin: 'intent-tracker', key: 'activity' } as const, {}
 /**
  * Work still running beside the main loop, not shown on a part: background commands and subagents.
  * Keyed by task id ("cmd:<task id>", "agent:<agent id>"), never by label: two runs under one title are two rows,
- * each leaving on its own end. `owner` is the subagent that started a command (absent: the main loop).
+ * each leaving on its own end. `owner` is the subagent that started a command (absent: the main loop);
+ * `isOwnerSeen`, whether `$.agent.list()` has ever named that owner.
  */
 const background = atom(
   { plugin: 'intent-tracker', key: 'background' } as const,
-  {} as Record<string, { label: string; stage: StageKey; at: number; path?: string; lastOutputAt?: number; endReadAt?: number; owner?: string }>,
+  {} as Record<string, { label: string; stage: StageKey; at: number; path?: string; lastOutputAt?: number; endReadAt?: number; owner?: string; isOwnerSeen?: boolean }>,
 )
 
 /** How long a background item may stay listed with no end seen. */
@@ -201,9 +202,18 @@ async function reconcile($: EngineInterface): Promise<void> {
     }
     // An ended subagent leaves, and so do the background commands it started: their notification goes to
     // that subagent's own loop, never to the main conversation, so its end is the last word on them.
+    // Only an owner this list has named counts: a workflow's agents and the engine's forks carry ids no list
+    // names (AgentLoop.agentId), so an owner never seen here is not over; its command waits for its own end
+    // (exit line, notification) or the time limit.
     await update($, background, b =>
       Object.fromEntries(
-        Object.entries(b).filter(([key, item]) => (key.startsWith('agent:') ? !isOver(key.slice(6)) : !(item.owner && isOver(item.owner)))),
+        Object.entries(b).flatMap(([key, item]): [string, typeof item][] => {
+          if (key.startsWith('agent:')) return isOver(key.slice(6)) ? [] : [[key, item]]
+          if (!item.owner) return [[key, item]]
+          const isListed = byId.has(item.owner)
+          if ((item.isOwnerSeen || isListed) && isOver(item.owner)) return []
+          return [[key, isListed && !item.isOwnerSeen ? { ...item, isOwnerSeen: true } : item]]
+        }),
       ),
     )
     // Subagents that ended leave the spawned list too, so it does not grow without end.
