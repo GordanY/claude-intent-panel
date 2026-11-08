@@ -84,7 +84,7 @@ export type Intent = {
 }
 
 /** Where the work is now: plan, investigate, build, test, fix (after a failed test), review. */
-export type StageKey = 'plan' | 'investigate' | 'build' | 'test' | 'fix' | 'review' | 'think' | 'run' | 'compile'
+export type StageKey = 'plan' | 'investigate' | 'build' | 'test' | 'fix' | 'review' | 'think' | 'run' | 'compile' | 'ask' | 'approve'
 
 export type Stage = { now: StageKey | null; seen: StageKey[]; at: number; isTestFailing: boolean }
 

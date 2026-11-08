@@ -260,7 +260,10 @@ const PLAN = /\bplan(ning)?\b/i
 export function stageOf(call: Record<string, unknown>, isTest: boolean, isTestFailing: boolean): StageKey | null {
   const tool = String(call.tool)
   const words = `${String(call.subagent_type ?? '')} ${String(call.description ?? '')} ${String(call.skill ?? '')}`
-  if (tool === 'EnterPlanMode' || tool === 'ExitPlanMode') return 'plan'
+  // Waiting on the person: a question asked, or a plan put up for approval.
+  if (tool === 'AskUserQuestion') return 'ask'
+  if (tool === 'ExitPlanMode') return 'approve'
+  if (tool === 'EnterPlanMode') return 'plan'
   if (tool === 'Agent' || tool === 'Task' || tool === 'Skill') {
     if (/explore/i.test(String(call.subagent_type ?? ''))) return 'investigate'
     if (isTest || /test-runner|\btests?\b/i.test(words)) return 'test'
@@ -278,4 +281,22 @@ export function stageOf(call: Record<string, unknown>, isTest: boolean, isTestFa
 export function advance(stage: Stage, next: StageKey, at: number): Stage {
   const seen = stage.seen[stage.seen.length - 1] === next ? stage.seen : [...stage.seen, next].slice(-8)
   return { ...stage, now: next, at, seen }
+}
+
+/** Whether a reply ends by asking the person something: its last line ends in a question mark. */
+export function endsWithQuestion(text: string): boolean {
+  const lines = text.split('\n').map(line => line.trim()).filter(Boolean)
+  const last = (lines[lines.length - 1] ?? '').replace(/[\s*_`)）」』"'~]+$/u, '')
+  return /[?？]$/.test(last)
+}
+
+/** A short key of the live items for a refusal: "1, 7 (7a), 12 (12a, 12b)", never the whole list. */
+export function idKey(list: readonly Intent[]): string {
+  return list
+    .filter(one => isRequest(one) && isLive(one))
+    .map(request => {
+      const parts = partsOf(list, request.id).map(part => labelOf(list, part))
+      return parts.length > 0 ? `${request.id} (${parts.join(', ')})` : request.id
+    })
+    .join(', ')
 }

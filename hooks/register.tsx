@@ -6,7 +6,9 @@ import { ago, asLang, DEFAULT_LANG, langLabel, langName, strings } from './i18n'
 import type { Lang } from './i18n'
 import {
   close,
+  endsWithQuestion,
   entry,
+  idKey,
   labelOf,
   movePart,
   isDone,
@@ -975,6 +977,8 @@ export const register: Register = on => {
     // The pane's own prompts (start, refresh) are not a request to record.
     const isPerson = !/^\s*(\(Goals pane\)|（目標面板）|（目標パネル）)/.test(e.text)
     if (isPerson) await update($, pendingRecord, () => true)
+    // The person answered: no longer waiting on them.
+    await update($, stage, old => (old.now === 'ask' || old.now === 'approve' ? { ...old, now: null } : old))
     const context = [...(e.context ?? []), ...(isPerson ? [RECORD_FIRST] : [])]
     if (!(await read($, isDirty))) return next({ ...e, context })
     const block = `<intent-pane>\nThe intent pane for this worktree (the person's words are authoritative). Current list:\n${listText(
@@ -1083,8 +1087,10 @@ export const register: Register = on => {
     }
     await save($)
     await refreshTitle($)
+    const after = await read($, intents)
+    const labels = items.flatMap(item => after.filter(one => one.id === item.id).map(one => labelOf(after, one)))
 
-    return { result: listText(await read($, purpose), await read($, intents)) }
+    return { result: `Added: ${labels.join(', ')}\n\n${listText(await read($, purpose), after)}` }
   })
 
   on('tool.call', { tool: 'mcp__intent-tracker__intent_list' }, async $ => {
@@ -1102,7 +1108,7 @@ export const register: Register = on => {
     const evidence = str(args.evidence)
     const one = list.find(item => item.id === id)
     const p = await read($, purpose)
-    if (!one) return { deny: `No item with id "${id}".\n${listText(p, list)}` }
+    if (!one) return { deny: `No item "${str(args.id)}". Items (parts by label): ${idKey(list)}` }
     if (one.closed) return { deny: `Item ${id} is ${one.closed.as}; restore it first (intent_revise restore: true) if it applies again.` }
     if (kindOf(one) === 'limit') return { deny: `Item ${id} is a limit: it is never ticked. It holds, or intent_revise broken: "<evidence>".` }
     if (partsOf(list, id).length > 0) return { deny: `Request ${id} has parts: tick its parts; the request is done when all of them are.\n${listText(p, list)}` }
@@ -1133,9 +1139,9 @@ export const register: Register = on => {
     const id = str(args.id) ? (resolveId(list, str(args.id)) ?? str(args.id)) : ''
     const newPurpose = str(args.purpose)
     const p = await read($, purpose)
-    if (!id && !newPurpose) return { deny: `Give an item id, a purpose, or both.\n${listText(p, list)}` }
+    if (!id && !newPurpose) return { deny: `Give an item id, a purpose, or both. Items (parts by label): ${idKey(list)}` }
     const one = list.find(item => item.id === id)
-    if (id && !one) return { deny: `No item with id "${id}".\n${listText(p, list)}` }
+    if (id && !one) return { deny: `No item "${str(args.id)}". Items (parts by label): ${idKey(list)}` }
     const cancel = str(args.cancel)
     const broken = str(args.broken)
     if (one) {
@@ -1321,7 +1327,9 @@ export const register: Register = on => {
     // The turn is over: nothing is happening now, except what running subagents do.
     const working = new Set(Object.values(await read($, agentLinks)))
     await update($, activity, a => Object.fromEntries(Object.entries(a).filter(([k]) => working.has(k))))
-    await update($, stage, old => ({ ...old, now: null }))
+    // A reply that ends by asking the person something leaves the session waiting on them.
+    const waiting: StageKey | null = endsWithQuestion(e.answer ?? '') ? 'ask' : null
+    await update($, stage, old => ({ ...old, now: waiting }))
     const told = await read($, notes)
     if (told.length > 0) {
       await update($, notes, () => [])
@@ -1622,8 +1630,9 @@ export const register: Register = on => {
     // activity; with no part showing one, the session's stage under the bar.
     const live$ = await read($, activity)
     const isActivityShown = live.some(one => one.parent && one.isActive && !one.isMet && live$[one.id])
-    const stageLine = !isActivityShown && where.now && (
-      <Text bold color="cyan">
+    const isWaiting = where.now === 'ask' || where.now === 'approve'
+    const stageLine = (isWaiting || !isActivityShown) && where.now && (
+      <Text bold color={isWaiting ? 'yellow' : 'cyan'}>
         {t.nowLabel}
         {t.colon}
         {t.stage[where.now]}

@@ -1474,3 +1474,53 @@ test("the observer files a person's small follow-up under the request it refines
   const saved = store.get(`wt:${ROOT}`) as { intents: Intent[] }
   expect(saved.intents.find(one => one.ai === '當機後草稿還在')).toMatchObject({ parent: '1', isAuto: true, source: '草稿也要在當機後保留' })
 })
+
+test('the status says when the session is waiting on the person: a question asked, a plan up for approval, or a reply ending in a question', async ($, on) => {
+  engine(on)
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: '{"onTrack": true}', usage: USAGE } }))
+  const running = heldTools(on)
+  await running(() => seed($), async () => {})
+  const now = async () => {
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const line = (await texts(pane)).find(x => x.startsWith('現在：')) ?? ''
+    await pane.unmount()
+    return line
+  }
+
+  let seen = ''
+  await running(() => $.tool.call({ tool: 'AskUserQuestion', questions: [] } as never), async () => {
+    seen = await now()
+  })
+  expect(seen).toBe('現在：等你回答')
+  await running(() => $.tool.call({ tool: 'ExitPlanMode', plan: 'x' } as never), async () => {
+    seen = await now()
+  })
+  expect(seen).toBe('現在：等你核准計畫')
+
+  // A reply ending in a question keeps waiting after the turn; the person's next message ends it.
+  await $.turn.complete({ answer: '已完成。\n\n要我順便修好嗎？', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  expect(await now()).toBe('現在：等你回答')
+  await $.prompt.submit({ text: '好' })
+  expect(await now()).toBe('')
+  // A reply that asks nothing leaves nothing waiting.
+  await $.turn.complete({ answer: '完成了。', durationMs: 1, isAborted: false, turnId: 'u', reason: 'answer' })
+  expect(await now()).toBe('')
+})
+
+test('a wrong id is refused with a short key of the items, and an add says which labels it made', async ($, on) => {
+  engine(on)
+  await start($)
+  const added = await $.tool.call({
+    tool: ADD,
+    intents: [
+      { summary: '草稿要保留', check: 'x', source: '關掉 app 後草稿要保留' },
+      { summary: '關掉還在', check: 'y', parent: '+1' },
+      { summary: '切換還在', check: 'z', parent: '+1' },
+    ],
+  } as never)
+  expect('result' in added && String(added.result).startsWith('Added: 1, 1a, 1b')).toBe(true)
+  const wrong = await $.tool.call({ tool: MET, id: '2a', evidence: 'x' } as never)
+  expect('deny' in wrong && wrong.deny).toBe('No item "2a". Items (parts by label): 1 (1a, 1b)')
+})

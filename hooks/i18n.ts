@@ -122,7 +122,7 @@ export type Strings = {
   history: string
   actor: Record<'person' | 'claude' | 'auto', string>
   what: Record<'added' | 'edited' | 'met' | 'reopened' | 'confirmed' | 'cancelled' | 'replaced' | 'restored' | 'broken' | 'holding', string>
-  stage: Record<'plan' | 'investigate' | 'build' | 'test' | 'fix' | 'review' | 'think' | 'run' | 'compile', string>
+  stage: Record<'plan' | 'investigate' | 'build' | 'test' | 'fix' | 'review' | 'think' | 'run' | 'compile' | 'ask' | 'approve', string>
   alongside: string
   quietFor: (minutes: number) => string
   subagent: string
@@ -218,7 +218,7 @@ const EN: Strings = {
     broken: 'broken',
     holding: 'holding again',
   },
-  stage: { plan: 'Plan', investigate: 'Investigate', build: 'Editing', test: 'Test', fix: 'Fix', review: 'Review', think: 'Thinking', run: 'Running', compile: 'Building' },
+  stage: { plan: 'Plan', investigate: 'Investigate', build: 'Editing', test: 'Test', fix: 'Fix', review: 'Review', think: 'Thinking', run: 'Running', compile: 'Building', ask: 'Waiting for your answer', approve: 'Waiting for your approval' },
   alongside: 'Also running',
   quietFor: m => `no new output for ${m} min`,
   subagent: 'Subagent',
@@ -319,7 +319,7 @@ const ZH: Strings = {
     broken: '被破壞',
     holding: '恢復守住',
   },
-  stage: { plan: '規劃', investigate: '調查', build: '實作', test: '測試', fix: '修正', review: '審查', think: '思考中', run: '執行中', compile: '建置' },
+  stage: { plan: '規劃', investigate: '調查', build: '實作', test: '測試', fix: '修正', review: '審查', think: '思考中', run: '執行中', compile: '建置', ask: '等你回答', approve: '等你核准計畫' },
   alongside: '同時進行',
   quietFor: m => `${m} 分鐘沒有新輸出`,
   subagent: '子代理',
@@ -422,7 +422,7 @@ const JA: Strings = {
     broken: '破られた',
     holding: '再び維持',
   },
-  stage: { plan: '計画', investigate: '調査', build: '実装', test: 'テスト', fix: '修正', review: 'レビュー', think: '思考中', run: '実行中', compile: 'ビルド' },
+  stage: { plan: '計画', investigate: '調査', build: '実装', test: 'テスト', fix: '修正', review: 'レビュー', think: '思考中', run: '実行中', compile: 'ビルド', ask: 'あなたの回答待ち', approve: '承認待ち' },
   alongside: '並行中',
   quietFor: m => `${m} 分間出力なし`,
   subagent: 'サブエージェント',
