@@ -41,6 +41,8 @@ const LANG_KEY = 'settings:lang'
  * (no instructions, no tools, no drift check).
  */
 const isActive = atom({ plugin: 'intent-tracker', key: 'isActive' } as const, true)
+/** Whether the finished goals are expanded in the pane (folded by default). */
+const isDoneOpen = atom({ plugin: 'intent-tracker', key: 'isDoneOpen' } as const, false)
 
 /** A subagent's (or teammate's) call: only the main conversation edits the list. */
 function fromSubagent(e: unknown): boolean {
@@ -486,12 +488,15 @@ export const register: Register = on => {
     const p = await read($, purpose)
     const off = await read($, drift)
     const edit = await read($, editing)
-    const met = list.filter(one => one.isMet).length
     const lastAt = await read($, updatedAt)
     const nowMs = await read($, now)
     const chosen = await read($, lang)
+    const isDoneShown = await read($, isDoneOpen)
     const t = strings(chosen)
     const mainModel = modelName(await $.session.model().catch(() => t.mainSession))
+    const columns = e.props.bodyColumns ?? 40
+    const open = list.filter(one => !one.isMet)
+    const done = list.filter(one => one.isMet)
 
     const choose = async (next: Lang) => {
       await update($, lang, () => next)
@@ -499,79 +504,6 @@ export const register: Register = on => {
       await $.store.set(LANG_KEY, next)
       await refreshTitle($)
     }
-
-    // The language picker: one light button, opening the choices in place.
-    const languageRow =
-      edit === 'lang' || edit === 'lang-custom' ? (
-        <Box flexDirection="column">
-          <Box flexDirection="row" gap={TOOLBAR_GAP} flexWrap="wrap">
-            <Text dimColor>🌐</Text>
-            {(
-              [
-                { key: 'lang-en', label: 'English', lang: { code: 'en' } },
-                { key: 'lang-zh', label: '中文', lang: { code: 'zh' } },
-                { key: 'lang-ja', label: '日本語', lang: { code: 'ja' } },
-              ] as const
-            ).map(o => (
-              <Button key={o.key} label={o.label} plain dimColor={chosen.code !== o.lang.code} onPress={() => choose(o.lang)} />
-            ))}
-            <Button
-              key="lang-custom"
-              label={chosen.code === 'custom' ? `${t.customOption} ${langLabel(chosen)}` : t.customOption}
-              plain
-              dimColor={chosen.code !== 'custom'}
-              onPress={() => update($, editing, () => 'lang-custom')}
-            />
-            <Button key="lang-cancel" label="✕" plain dimColor onPress={() => update($, editing, () => null)} />
-          </Box>
-          {edit === 'lang-custom' && (
-            <Input
-              key="lang-custom-input"
-              placeholder={t.customPlaceholder}
-              value={chosen.code === 'custom' ? (chosen.custom ?? '') : ''}
-              submitLabel={t.save}
-              onSubmit={value => {
-                const text = value.trim()
-                void (text ? choose({ code: 'custom', custom: text }) : update($, editing, () => null))
-              }}
-            />
-          )}
-        </Box>
-      ) : (
-        <Box flexDirection="row">
-          <Button
-            key="lang"
-            label={`🌐 ${t.language}${t.colon}${langLabel(chosen)}`}
-            plain
-            dimColor
-            onPress={() => update($, editing, () => 'lang')}
-          />
-        </Box>
-      )
-
-    // Metadata at the very bottom, below a divider, in light text.
-    const footer = (
-      <Box flexDirection="column">
-        <Text dimColor>{'─'.repeat(Math.max(8, Math.min(e.props.bodyColumns ?? 24, 60)))}</Text>
-        <Text dimColor wrap="wrap">
-          {t.lastUpdate}
-          {t.colon}
-          {lastAt === null ? '—' : ago(t, lastAt, Math.max(nowMs, lastAt))}
-        </Text>
-        <Text dimColor wrap="wrap">
-          {t.summaries}
-          {t.colon}
-          {mainModel}
-          {t.paren(t.mainSession)}
-        </Text>
-        <Text dimColor wrap="wrap">
-          {t.driftCheck}
-          {t.colon}
-          {modelName(DRIFT_MODEL)}
-        </Text>
-        {languageRow}
-      </Box>
-    )
 
     const saveMine = (target: string) => (value: string) => {
       void (async () => {
@@ -584,33 +516,30 @@ export const register: Register = on => {
       })()
     }
 
-    const mineRow = (target: string, mine: string) =>
-      mine && edit !== target ? (
-        <Box flexDirection="row" gap={1}>
-          <Text wrap="wrap">
-            {t.you}
-            {t.colon}
-            {mine}
-          </Text>
-          <Button key={`edit-${target}`} label={t.edit} plain onPress={() => update($, editing, () => target)} />
-        </Box>
-      ) : (
-        <Input
-          key={`mine-${target}`}
-          label={`${t.you}${t.colon}`}
-          placeholder={t.minePlaceholder}
-          value={mine}
-          submitLabel={t.save}
-          onSubmit={saveMine(target)}
-        />
-      )
+    /** A small ✎ that opens the field for the person's own words. */
+    const pencil = (target: string) => (
+      <Button key={`edit-${target}`} label="✎" plain dimColor onPress={() => update($, editing, () => target)} />
+    )
+
+    /** The field for the person's own words, shown only while they write. */
+    const mineField = (target: string, mine: string) => (
+      <Input
+        key={`mine-${target}`}
+        label={`${t.you}${t.colon}`}
+        placeholder={t.minePlaceholder}
+        value={mine}
+        submitLabel={t.save}
+        autoFocus
+        onSubmit={saveMine(target)}
+      />
+    )
 
     // Bottom toolbar: light, chrome-free buttons; icon + text where the pane is
     // wide enough for every label, icon alone where it is not.
     type Tool = { key: string; icon: string; text: string; onPress: () => unknown }
     const toolbar = (tools: readonly Tool[]) => {
       const full = tools.reduce((sum, one) => sum + cells(`${one.icon} ${one.text}`), 0) + TOOLBAR_GAP * (tools.length - 1)
-      const isWide = (e.props.bodyColumns ?? 0) >= full
+      const isWide = columns >= full
       return (
         <Box flexDirection="row" gap={TOOLBAR_GAP}>
           {tools.map(one => (
@@ -658,16 +587,191 @@ export const register: Register = on => {
       },
     }
 
+    // Metadata on one light line below a divider; 🌐 opens the language choices.
+    const isPicking = edit === 'lang' || edit === 'lang-custom'
+    const meta = [
+      ...(lastAt === null ? [] : [ago(t, lastAt, Math.max(nowMs, lastAt))]),
+      mainModel,
+      `${t.driftShort} ${modelName(DRIFT_MODEL)}`,
+    ].join(' · ')
+    const footer = (
+      <Box flexDirection="column">
+        <Text dimColor>{'─'.repeat(Math.max(8, Math.min(columns, 60)))}</Text>
+        <Box flexDirection="row" flexWrap="wrap">
+          <Text dimColor wrap="wrap">{`${meta} · `}</Text>
+          <Button
+            key="lang"
+            label={`🌐 ${langLabel(chosen)}`}
+            plain
+            dimColor
+            onPress={() => update($, editing, () => (isPicking ? null : 'lang'))}
+          />
+        </Box>
+        {isPicking && (
+          <Box flexDirection="row" gap={TOOLBAR_GAP} flexWrap="wrap">
+            {(
+              [
+                { key: 'lang-en', label: 'English', lang: { code: 'en' } },
+                { key: 'lang-zh', label: '中文', lang: { code: 'zh' } },
+                { key: 'lang-ja', label: '日本語', lang: { code: 'ja' } },
+              ] as const
+            ).map(o => (
+              <Button key={o.key} label={o.label} plain dimColor={chosen.code !== o.lang.code} onPress={() => choose(o.lang)} />
+            ))}
+            <Button
+              key="lang-custom"
+              label={chosen.code === 'custom' ? `${t.customOption} ${langLabel(chosen)}` : t.customOption}
+              plain
+              dimColor={chosen.code !== 'custom'}
+              onPress={() => update($, editing, () => 'lang-custom')}
+            />
+          </Box>
+        )}
+        {edit === 'lang-custom' && (
+          <Input
+            key="lang-custom-input"
+            placeholder={t.customPlaceholder}
+            value={chosen.code === 'custom' ? (chosen.custom ?? '') : ''}
+            submitLabel={t.save}
+            autoFocus
+            onSubmit={value => {
+              const text = value.trim()
+              void (text ? choose({ code: 'custom', custom: text }) : update($, editing, () => null))
+            }}
+          />
+        )}
+      </Box>
+    )
+
     if (list.length === 0 && !p.ai) {
       return (
         <Box flexDirection="column" gap={1}>
-          <Text dimColor wrap="wrap">{t.empty1}</Text>
-          <Text dimColor wrap="wrap">{t.empty2}</Text>
+          <Text dimColor>{t.empty}</Text>
           {toolbar([startTool, closeTool])}
           {footer}
         </Box>
       )
     }
+
+    // The purpose: one line. The person's words lead when they wrote some,
+    // Claude's line under them, light.
+    const purposeBlock = (
+      <Box flexDirection="column">
+        <Box flexDirection="row" gap={1}>
+          <Text bold wrap="wrap">
+            {p.mine || p.ai || t.notYet}
+          </Text>
+          {edit !== 'purpose' && pencil('purpose')}
+        </Box>
+        {p.mine && p.ai && p.mine !== p.ai && (
+          <Text dimColor wrap="wrap">
+            {t.ai}
+            {t.colon}
+            {p.ai}
+          </Text>
+        )}
+        {edit === 'purpose' && mineField('purpose', p.mine)}
+      </Box>
+    )
+
+    // Progress at a glance (the count is in the title too).
+    const barWidth = Math.max(6, Math.min(20, columns - 8))
+    const filled = list.length === 0 ? 0 : Math.round((done.length / list.length) * barWidth)
+    const progress = (
+      <Text dimColor>
+        {'▓'.repeat(filled)}
+        {'░'.repeat(barWidth - filled)} {done.length}/{list.length}
+      </Text>
+    )
+
+    const driftBox = off && (
+      <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
+        <Text color="yellow" wrap="wrap">
+          ⚠️ {t.drift}
+          {off.isByUser ? t.byUser : ''}
+          {t.colon}
+          {off.note}
+        </Text>
+        <Box flexDirection="row" gap={1}>
+          <Button
+            key="drift-add"
+            label={t.addToList}
+            onPress={async () => {
+              await update($, intents, l => {
+                const n = l.reduce((max, one) => Math.max(max, Number(one.id) || 0), 0) + 1
+                return [...l, { id: String(n), ai: off.note, mine: '', check: '', isMet: false, evidence: '' }]
+              })
+              await update($, drift, () => null)
+              await update($, isDirty, () => true)
+              await save($)
+              await refreshTitle($)
+            }}
+          />
+          <Button
+            key="drift-ignore"
+            label={t.ignore}
+            onPress={async () => {
+              await update($, drift, () => null)
+              await save($)
+            }}
+          />
+        </Box>
+      </Box>
+    )
+
+    // What is still open, in full: the goal, the person's words, the check.
+    const openGoals = open.map(one => (
+      <Box key={`goal-${one.id}`} flexDirection="column">
+        <Box flexDirection="row" gap={1}>
+          <Text bold wrap="wrap">
+            ○ {one.id}. {one.ai}
+          </Text>
+          {edit !== one.id && pencil(one.id)}
+        </Box>
+        {one.mine && edit !== one.id && (
+          <Text wrap="wrap">
+            {'  '}
+            {t.you}
+            {t.colon}
+            {one.mine}
+          </Text>
+        )}
+        {edit === one.id && mineField(one.id, one.mine)}
+        <Text dimColor wrap="wrap">
+          {'  '}
+          {t.check}
+          {t.colon}
+          {one.check || t.noCheck}
+        </Text>
+      </Box>
+    ))
+
+    // What is done, folded to one line; open it for each goal and its evidence.
+    const doneGroup = done.length > 0 && (
+      <Box flexDirection="column">
+        <Button
+          key="done-toggle"
+          label={`✓ ${t.doneGroup(done.length)} ${isDoneShown ? '▾' : '▸'}`}
+          plain
+          dimColor
+          onPress={() => update($, isDoneOpen, v => !v)}
+        />
+        {isDoneShown &&
+          done.map(one => (
+            <Box key={`done-${one.id}`} flexDirection="column">
+              <Text color="green" wrap="wrap">
+                ✓ {one.id}. {one.mine || one.ai}
+              </Text>
+              <Text dimColor wrap="wrap">
+                {'  '}
+                {t.evidence}
+                {t.colon}
+                {one.evidence}
+              </Text>
+            </Box>
+          ))}
+      </Box>
+    )
 
     const clearRow =
       edit === 'confirm-clear' ? (
@@ -695,66 +799,12 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="column">
-          <Text bold>{t.purpose}</Text>
-          <Text wrap="wrap">
-            {t.ai}
-            {t.colon}
-            {p.ai || t.notYet}
-          </Text>
-          {mineRow('purpose', p.mine)}
+          {purposeBlock}
+          {list.length > 0 && progress}
         </Box>
-
-        <Text bold>
-          {t.met} {met}/{list.length}
-        </Text>
-
-        {list.map(one => (
-          <Box key={`goal-${one.id}`} flexDirection="column">
-            <Text color={one.isMet ? 'green' : undefined} bold wrap="wrap">
-              {one.isMet ? '✓' : '○'} {one.id}. {one.ai}
-            </Text>
-            {mineRow(one.id, one.mine)}
-            <Text dimColor wrap="wrap">
-              {one.isMet ? `${t.evidence}${t.colon}${one.evidence}` : `${t.check}${t.colon}${one.check || t.noCheck}`}
-            </Text>
-          </Box>
-        ))}
-
-        {off && (
-          <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
-            <Text color="yellow" wrap="wrap">
-              ⚠️ {t.drift}
-              {off.isByUser ? t.byUser : ''}
-              {t.colon}
-              {off.note}
-            </Text>
-            <Box flexDirection="row" gap={1}>
-              <Button
-                key="drift-add"
-                label={t.addToList}
-                onPress={async () => {
-                  await update($, intents, l => {
-                    const n = l.reduce((max, one) => Math.max(max, Number(one.id) || 0), 0) + 1
-                    return [...l, { id: String(n), ai: off.note, mine: '', check: '', isMet: false, evidence: '' }]
-                  })
-                  await update($, drift, () => null)
-                  await update($, isDirty, () => true)
-                  await save($)
-                  await refreshTitle($)
-                }}
-              />
-              <Button
-                key="drift-ignore"
-                label={t.ignore}
-                onPress={async () => {
-                  await update($, drift, () => null)
-                  await save($)
-                }}
-              />
-            </Box>
-          </Box>
-        )}
-
+        {driftBox}
+        {openGoals}
+        {doneGroup}
         {clearRow}
         {footer}
       </Box>

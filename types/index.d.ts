@@ -40,6 +40,8 @@ declare module 'claude-code' {
       lang: Lang
       /** A person can see this session (not `-p`, not the SDK): the mod acts only then. */
       isActive: boolean
+      /** The finished goals are expanded in the pane. */
+      isDoneOpen: boolean
     }
   }
 }

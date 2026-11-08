@@ -3,7 +3,7 @@
 A Claude Code mod that keeps a side pane, **🎯 Goals**, showing in plain words what the current work is for and which goals are met, so a long, technical session never loses sight of its original intent.
 
 - **Purpose and goals**: Claude records a one-line purpose and 1–5 goals, each with a plain-language summary and the concrete check that proves it.
-- **Your own words**: every goal (and the purpose) has an input field for your own wording; it reaches Claude beside your next prompt and is treated as authoritative.
+- **Your own words**: press ✎ beside the purpose or a goal to write it your way; it reaches Claude beside your next prompt and is treated as authoritative, and it leads where both are shown.
 - **Auto-tick with evidence**: Claude ticks a goal only after its check actually ran and passed, and records the evidence. A tick without evidence is refused.
 - **Drift warning**: after each turn a small model (Haiku) checks the turn against the list and flags off-list work, with *add to list* / *ignore* buttons.
 - **Per worktree**: the list is saved per project root, so quitting the CLI and resuming shows the same pane. When a worktree's folder is removed (its parent folder still present), its list is deleted at the next CLI start. A **⌫ Clear list** button (two presses) resets it.
@@ -41,7 +41,8 @@ Update later with `/plugin marketplace update claude-intent-panel`, then `/reloa
 - The buttons sit in a light toolbar at the bottom of the pane: icon and text when the pane is wide enough, icon alone when it is narrow (▶ start, ↻ refresh, ⌫ clear, ✕ close).
 - An empty pane shows **▶ Start**: it asks Claude to build the purpose and goals from the conversation so far (useful in a session that was already running), ticking goals already verified.
 - **↻ Refresh AI content** asks Claude to redo the AI side (purpose, goal summaries, checks and ticks) from the current conversation; your own words are never changed.
-- Below a divider at the very bottom, light metadata: when the list last changed ("Last update: 10 min ago") and which model does what (summaries and ticks: the session's own model; drift check: Haiku).
+- The pane keeps the key information in view: the purpose in one line, a progress bar, any drift warning above the goals, then the open goals with their checks. Finished goals fold into one line (**✓ 3 done ▸**); open it for each goal and its evidence.
+- Below a divider at the very bottom, one light line of metadata: when the list last changed, the model doing summaries and ticks (the session's own), the drift-check model (Haiku), and 🌐 the language.
 - In the terminal, move focus into the pane with `ctrl+x tab` (or click) to type in a field.
 
 ## Develop

@@ -50,8 +50,9 @@ export type Strings = {
   title: string
   command: string
   opened: string
-  empty1: string
-  empty2: string
+  empty: string
+  doneGroup: (n: number) => string
+  driftShort: string
   start: string
   refresh: string
   clear: string
@@ -97,8 +98,9 @@ const EN: Strings = {
   title: '🎯 Goals',
   command: 'Open the goals pane',
   opened: 'Goals pane opened.',
-  empty1: 'No goals yet. Describe what you want to do and Claude will list it here.',
-  empty2: 'Already mid-conversation? Press "▶ Start" and Claude will build the purpose and goals from the conversation so far.',
+  empty: 'No goals yet.',
+  doneGroup: n => `${n} done`,
+  driftShort: 'drift',
   start: 'Start',
   refresh: 'Refresh AI content',
   clear: 'Clear list',
@@ -149,8 +151,9 @@ const ZH: Strings = {
   title: '🎯 本次目標',
   command: '打開本次目標面板',
   opened: '已打開本次目標面板。',
-  empty1: '還沒有目標。開始描述這次要做的事，Claude 會在這裡整理出來。',
-  empty2: '對話已經進行一段了？按「▶ 開始整理」，Claude 會依目前的對話整理出原意和目標。',
+  empty: '還沒有目標。',
+  doneGroup: n => `已完成 ${n} 項`,
+  driftShort: '偏題',
   start: '開始整理',
   refresh: '重新整理 AI 內容',
   clear: '清空清單',
@@ -203,8 +206,9 @@ const JA: Strings = {
   title: '🎯 今回の目標',
   command: '目標パネルを開く',
   opened: '目標パネルを開きました。',
-  empty1: 'まだ目標がありません。やりたいことを伝えると、Claude がここに整理します。',
-  empty2: '会話がすでに進んでいますか？「▶ 整理開始」を押すと、これまでの会話から目的と目標を整理します。',
+  empty: 'まだ目標がありません。',
+  doneGroup: n => `${n} 件完了`,
+  driftShort: '脱線',
   start: '整理開始',
   refresh: 'AI 内容を更新',
   clear: 'リストを消去',

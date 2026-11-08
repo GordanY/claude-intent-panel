@@ -101,9 +101,11 @@ test('goals show in the pane, tick once their check passes, and are saved for th
   await seed($)
 
   let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /已達成/ }))?.text).toBe('已達成 0/2')
+  expect((await ui.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 0/2')).toBe(true)
   expect((await ui.find({ type: 'Text', text: /草稿要保留/ }))?.text).toBe('○ 1. 關掉 app 後草稿要保留')
-  expect((await ui.find({ type: 'Text', text: /檢查：DraftPersist/ }))?.text).toBe('檢查：DraftPersistTests 通過')
+  expect((await ui.find({ type: 'Text', text: /檢查：DraftPersist/ }))?.text).toBe('  檢查：DraftPersistTests 通過')
+  // No field for the person's words until they press ✎.
+  expect(await ui.find({ type: 'Input' })).toBeUndefined()
   await ui.unmount()
 
   const refused = await $.tool.call({ tool: MET, id: '1', evidence: '' } as never)
@@ -111,9 +113,13 @@ test('goals show in the pane, tick once their check passes, and are saved for th
 
   await $.tool.call({ tool: MET, id: '1', evidence: 'DraftPersistTests 3/3 通過' } as never)
   ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /已達成/ }))?.text).toBe('已達成 1/2')
+  expect((await ui.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
+  // Done goals fold to one line until opened.
+  expect(await ui.find({ type: 'Text', text: /草稿要保留/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Button', key: 'done-toggle' }))?.text).toBe('✓ 已完成 1 項 ▸')
+  await ui.press({ key: 'done-toggle' })
   expect((await ui.find({ type: 'Text', text: /草稿要保留/ }))?.text).toBe('✓ 1. 關掉 app 後草稿要保留')
-  expect((await ui.find({ type: 'Text', text: /依據/ }))?.text).toBe('依據：DraftPersistTests 3/3 通過')
+  expect((await ui.find({ type: 'Text', text: /依據/ }))?.text).toBe('  依據：DraftPersistTests 3/3 通過')
   await ui.unmount()
 
   const saved = (store.get(`wt:${ROOT}`)) as typeof SAVED
@@ -127,8 +133,10 @@ test("the person's own words show and reach the model once", async ($, on) => {
   await seed($)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'edit-1' })
   await ui.input({ key: 'mine-1', text: '草稿絕對不能不見' })
-  expect((await ui.find({ type: 'Text', text: /你：草稿/ }))?.text).toBe('你：草稿絕對不能不見')
+  expect((await ui.find({ type: 'Text', text: /你：草稿/ }))?.text).toBe('  你：草稿絕對不能不見')
+  expect(await ui.find({ type: 'Input' })).toBeUndefined()
   await ui.unmount()
 
   const first = await $.prompt.submit({ text: '繼續' })
@@ -143,8 +151,9 @@ test('a resumed session shows the list saved for its worktree and tells the mode
   await start($)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /已達成/ }))?.text).toBe('已達成 1/1')
-  expect((await ui.find({ type: 'Text', text: /你：草稿/ }))?.text).toBe('你：草稿絕對不能不見')
+  expect((await ui.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/1')).toBe(true)
+  await ui.press({ key: 'done-toggle' })
+  expect((await ui.find({ type: 'Text', text: /草稿絕對不能不見/ }))?.text).toBe('✓ 1. 草稿絕對不能不見')
   await ui.unmount()
 
   const first = await $.prompt.submit({ text: '繼續昨天的' })
@@ -176,7 +185,7 @@ test('clearing takes two presses and removes the saved list', async ($, on) => {
 
   expect(store.get(`wt:${ROOT}`)).toBeUndefined()
   const after = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await after.find({ type: 'Text', text: /還沒有目標/ }))?.text).toBe('還沒有目標。開始描述這次要做的事，Claude 會在這裡整理出來。')
+  expect((await after.find({ type: 'Text', text: /還沒有目標/ }))?.text).toBe('還沒有目標。')
   await after.unmount()
 })
 
@@ -213,7 +222,7 @@ test('an off-list turn raises a drift warning that can be added to the list', as
 
   view = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await view.find({ type: 'Text', text: /⚠️ 偏題/ })).toBeUndefined()
-  expect((await view.find({ type: 'Text', text: /已達成/ }))?.text).toBe('已達成 0/3')
+  expect((await view.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 0/3')).toBe(true)
   await view.unmount()
 })
 
@@ -252,6 +261,7 @@ test("the refresh button asks Claude to redo the AI side only, and the person's 
   await seed($)
 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'edit-1' })
   await pane.input({ key: 'mine-1', text: '草稿絕對不能不見' })
 
   await pane.press({ key: 'refresh-ai' })
@@ -326,20 +336,19 @@ test('the footer shows when the list last changed and which models do the work',
   await seed($)
 
   let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /最後更新/ }))?.text).toBe('最後更新：剛剛')
-  expect((await pane.find({ type: 'Text', text: /摘要・打勾/ }))?.text).toBe('摘要・打勾：Opus 5.5（主對話）')
-  expect((await pane.find({ type: 'Text', text: /偏題檢查/ }))?.text).toBe('偏題檢查：Haiku')
+  expect((await pane.find({ type: 'Text', text: /Haiku/ }))?.text).toBe('剛剛 · Opus 5.5 · 偏題 Haiku · ')
+  expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 中文')
   expect((await pane.find({ type: 'Text', text: /^─+$/ }))).toBeDefined()
   await pane.unmount()
 
   await ui.clock.advance(10 * 60_000)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /最後更新/ }))?.text).toBe('最後更新：10 分鐘前')
+  expect((await pane.find({ type: 'Text', text: /Haiku/ }))?.text).toBe('10 分鐘前 · Opus 5.5 · 偏題 Haiku · ')
   await pane.unmount()
 
   await $.tool.call({ tool: MET, id: '1', evidence: '通過' } as never)
   pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /最後更新/ }))?.text).toBe('最後更新：剛剛')
+  expect((await pane.find({ type: 'Text', text: /Haiku/ }))?.text).toBe('剛剛 · Opus 5.5 · 偏題 Haiku · ')
   await pane.unmount()
 })
 
@@ -368,9 +377,9 @@ test('the language defaults to English and the choice is saved and applied', asy
   await seed($)
 
   let pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 60 }, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /Last update/ }))?.text).toBe('Last update: just now')
+  expect((await pane.find({ type: 'Text', text: /Haiku/ }))?.text).toBe('just now · Opus 5.5 · drift Haiku · ')
   expect((await pane.find({ type: 'Button', key: 'refresh-ai' }))?.text).toBe('↻ Refresh AI content')
-  expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 Language: English')
+  expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 English')
 
   await pane.press({ key: 'lang' })
   await pane.press({ key: 'lang-ja' })
@@ -378,8 +387,8 @@ test('the language defaults to English and the choice is saved and applied', asy
   expect(store.get('settings:lang')).toEqual({ code: 'ja' })
 
   pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 60 }, surface: 'terminal' })
-  expect((await pane.find({ type: 'Text', text: /最終更新/ }))?.text).toBe('最終更新：たった今')
-  expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 言語：日本語')
+  expect((await pane.find({ type: 'Text', text: /Haiku/ }))?.text).toBe('たった今 · Opus 5.5 · 脱線 Haiku · ')
+  expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 日本語')
   await pane.press({ key: 'lang' })
   await pane.press({ key: 'lang-custom' })
   await pane.input({ key: 'lang-custom-input', text: 'Deutsch' })
@@ -388,7 +397,7 @@ test('the language defaults to English and the choice is saved and applied', asy
 
   // A custom language: English labels, Claude told to write in it.
   pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 60 }, surface: 'terminal' })
-  expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 Language: Deutsch')
+  expect((await pane.find({ type: 'Button', key: 'lang' }))?.text).toBe('🌐 Deutsch')
   await pane.unmount()
   const composed = await $.prompt.compose({
     model: 'claude-opus-5-5',
@@ -476,4 +485,34 @@ test("a subagent cannot change the main conversation's list", async ($, on) => {
     expect('deny' in result && typeof result.deny === 'string').toBe(true)
   }
   expect(JSON.stringify(store.get(`wt:${ROOT}`))).toBe(before)
+})
+
+test("the purpose is one line: the person's words lead, Claude's line under them", async ($, on) => {
+  engine(on)
+  await seed($)
+
+  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Text', text: /修好草稿/ }))?.text).toBe('修好草稿消失的問題')
+  await pane.press({ key: 'edit-purpose' })
+  await pane.input({ key: 'mine-purpose', text: '草稿不能再不見' })
+  await pane.unmount()
+
+  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ type: 'Text', text: /草稿不能再不見/ }))?.text).toBe('草稿不能再不見')
+  expect((await pane.find({ type: 'Text', text: /AI：/ }))?.text).toBe('AI：修好草稿消失的問題')
+  await pane.unmount()
+})
+
+test('a drift warning sits above the goals, where it is seen first', async ($, on) => {
+  engine(on, {
+    [`wt:${ROOT}`]: { ...SAVED, intents: [{ ...SAVED.intents[0], isMet: false }], drift: { note: '改了 CI', isByUser: false } },
+  })
+  await start($)
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const texts = (await pane.findAll({ type: 'Text' })).map(one => one.text)
+  const driftAt = texts.findIndex(one => one.startsWith('⚠️'))
+  const goalAt = texts.findIndex(one => one.startsWith('○ 1.'))
+  expect(driftAt >= 0 && goalAt > driftAt).toBe(true)
+  await pane.unmount()
 })
