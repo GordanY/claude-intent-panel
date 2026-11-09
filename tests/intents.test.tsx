@@ -1599,7 +1599,7 @@ test('finished parts fold under their request (▸ opens them) and show green; r
   await pane.press({ key: 'fold-1' })
   shown = await texts(pane)
   expect(shown).toContain('✓ 1a. 關掉 app 後草稿還在')
-  expect((await pane.find({ type: 'Text', text: /^關掉 app 後草稿還在/ }))?.props.color).toBe('green')
+  expect((await pane.find({ type: 'Text', text: /^關掉 app 後草稿還在/ }))?.props.color).toBe('success')
   await pane.press({ key: 'fold-1' })
   expect((await texts(pane)).some(x => x.includes('1a.'))).toBe(false)
   await pane.unmount()
@@ -2358,69 +2358,27 @@ test('the observer flags a check no result could pair with', async ($, on) => {
   expect(judged[2]).toBe('2: DraftSyncTests 在離線時通過')
 })
 
-test('the footer offers a dark or light color scheme after the language', async ($, on) => {
-  const store = engine(on)
+test("the pane follows the person's Claude Code theme: no color choice, theme colors, a transparent pane", async ($, on) => {
+  engine(on)
   await seed($)
   await $.tool.call({ tool: MET, id: '1', evidence: 'DraftPersistTests 3/3 通過' } as never)
-  let pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  // After 🌐 language: the scheme, starting from the surface's own colors.
-  const buttons = (await pane.findAll({ type: 'Button' })).map(one => one.key)
-  expect(buttons.indexOf('scheme')).toBe(buttons.indexOf('lang') + 1)
-  const label = async () => (await pane.find({ type: 'Button', key: 'scheme' }))?.text
-  expect(await label()).toBe('◐ 自動配色')
-  await pane.press({ key: 'done-toggle' })
-  expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.props.color).toBe('green')
-  // Light: deeper shades that read on a light background.
-  await pane.press({ key: 'scheme' })
-  await pane.press({ key: 'scheme' })
-  expect(await label()).toBe('◐ 淺色')
-  expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.props.color).toBe('#1a7f37')
-  expect(store.get('settings:theme')).toBe('light')
-  await pane.unmount()
-  // The choice is kept for the next session.
-  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  // From light: auto, then dark.
-  await pane.press({ key: 'scheme' })
-  await pane.press({ key: 'scheme' })
-  expect(store.get('settings:theme')).toBe('dark')
-  await pane.unmount()
-  await start($)
-  pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ type: 'Button', key: 'scheme' }))?.text).toBe('◐ 深色')
-  // (The done group is still open from before.)
-  expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.props.color).toBe('#5fd77a')
-  await pane.unmount()
-})
-
-test('the scheme colors the progress bar and the pane background', async ($, on) => {
-  const store = engine(on)
-  await seed($)
-  await $.tool.call({ tool: MET, id: '1', evidence: 'DraftPersistTests 3/3 通過' } as never)
-  expect(ui.background).toBeUndefined()
+  // Transparent: the pane, its frame included, paints nothing over the transcript's own background.
+  expect(ui.background).toBe('transparent')
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  // Auto: the bar as before, one dim line.
-  expect((await pane.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
-  // Dark, then light: the background is painted and the bar's done share takes the scheme's color.
-  await pane.press({ key: 'scheme' })
-  expect(ui.background).toBe('#1e1f22')
-  await pane.press({ key: 'scheme' })
-  expect(store.get('settings:theme')).toBe('light')
-  expect(ui.background).toBe('#f6f8fa')
-  expect((await pane.find({ type: 'Text', text: /^▓+$/ }))?.props.color).toBe('#1a7f37')
-  expect((await pane.find({ type: 'Text', text: /^░+ 1\/2$/ }))?.props.dimColor).toBe(true)
-  // Every text on the light background has a color of its own: none is left in the terminal's.
-  const all = await pane.findAll({ type: 'Text' })
-  expect(all.length).toBeGreaterThan(5)
-  expect(all.filter(one => typeof one.props.color !== 'string').map(one => one.text)).toEqual([])
-  expect((await pane.find({ type: 'Text', text: /草稿要保留|不要動到同步/ }))?.props.color).toBe('#1f2328')
-  // Button labels too, and they still press.
-  const scheme = await pane.find({ type: 'Button', key: 'scheme' })
-  expect(scheme?.text).toBe('◐ 淺色')
-  expect(JSON.stringify(scheme?.children)).toContain('#1f2328')
-  // Back to auto: the background is the surface's own again.
-  await pane.press({ key: 'scheme' })
-  expect(ui.background).toBeUndefined()
-  expect((await pane.find({ type: 'Text', text: /[▓░]/ }))?.text?.endsWith(' 1/2')).toBe(true)
+  // No color-scheme button; the language is the last setting.
+  const buttons = (await pane.findAll({ type: 'Button' })).map(one => one.key)
+  expect(buttons).not.toContain('scheme')
+  expect(buttons).toContain('lang')
+  expect((await texts(pane)).some(x => x.includes('◐'))).toBe(false)
+  // Colors are the theme's own keys.
+  await pane.press({ key: 'done-toggle' })
+  expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.props.color).toBe('success')
+  // No text is forced to a color of the mod's: plain text keeps the surface's.
+  expect((await pane.find({ type: 'Text', text: /不要動到同步/ }))?.props.color).toBeUndefined()
+  // The bar: one dim line.
+  const bar = await pane.find({ type: 'Text', text: /[▓░]/ })
+  expect(bar?.text?.endsWith(' 1/2')).toBe(true)
+  expect(bar?.props.dimColor).toBe(true)
   await pane.unmount()
 })
 
@@ -2494,9 +2452,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect((await pane.find({ type: 'Text', text: /Opus/ }))?.text).toBe('剛剛 · 整理 Opus 5.5')
     const divider = (await pane.find({ type: 'Text', text: /^─+$/ })) ?? (await pane.findAll({ type: 'Svg' })).find(one => one.props.height === 1)
     expect(divider).toBeDefined()
-    // (The innermost Box holding all four settings.)
+    // (The innermost Box holding all three settings.)
     const settings = (await pane.findAll({ type: 'Box' })).findLast(box =>
-      ['drift-model', 'observer', 'lang', 'scheme'].every(key => JSON.stringify(box.children).includes(`"key":"${key}"`)),
+      ['drift-model', 'observer', 'lang'].every(key => JSON.stringify(box.children).includes(`"key":"${key}"`)),
     )
     expect(settings?.props.flexDirection).toBe('row')
     expect(settings?.text).not.toContain('Opus 5.5')
@@ -2584,7 +2542,7 @@ test('sections are divided and the tools and settings stay pinned at the bottom'
   const kids = page?.children as { props?: { key?: string } }[]
   expect(kids.map(kid => kid.props?.key ?? (kid as { key?: string }).key)).toEqual(['top', 'bottom'])
   const bottom = await pane.find({ type: 'Box', key: 'bottom' })
-  for (const key of ['refresh-ai', 'drift-model', 'observer', 'lang', 'scheme']) expect(JSON.stringify(bottom?.children)).toContain(`"key":"${key}"`)
+  for (const key of ['refresh-ai', 'drift-model', 'observer', 'lang']) expect(JSON.stringify(bottom?.children)).toContain(`"key":"${key}"`)
   expect(JSON.stringify((await pane.find({ type: 'Box', key: 'top' }))?.children)).not.toContain('"key":"lang"')
   await pane.unmount()
   // Inline above the prompt: as tall as its content.
@@ -2749,7 +2707,7 @@ test('a background command quiet for ten minutes is drawn faded', async ($, on) 
     return { dim: line?.props.dimColor === true, color: line?.props.color }
   }
   // Recent output: drawn as busy.
-  expect(await look()).toEqual({ dim: false, color: 'cyan' })
+  expect(await look()).toEqual({ dim: false, color: 'suggestion' })
   // Ten quiet minutes on: faded.
   await ui.clock.advance(10 * 60_000)
   await ui.clock.settle()
@@ -2805,29 +2763,15 @@ test('on desktop each divider is a visible full-width line', async ($, on) => {
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`the pane paints its own background in dark or light, so its text never sits on the surface's opposite color (${surface})`, async ($, on) => {
+  test(`the page paints no background of its own, so the pane is the theme's own color edge to edge (${surface})`, async ($, on) => {
     engine(on)
     await seed($)
-    const page = async () => {
-      const pane = await $.ui.mount({ ...PANE, surface })
-      const box = await pane.find({ type: 'Box', key: 'page' })
-      await pane.unmount()
-      return box?.props.backgroundColor
-    }
-    // Auto: the surface's own look.
-    expect(await page()).toBeUndefined()
-    let pane = await $.ui.mount({ ...PANE, surface })
-    await pane.press({ key: 'scheme' })
-    await pane.press({ key: 'scheme' })
+    const pane = await $.ui.mount({ ...PANE, surface })
+    const box = await pane.find({ type: 'Box', key: 'page' })
+    expect(box).toBeDefined()
+    expect(box?.props.backgroundColor).toBeUndefined()
+    expect(box?.props.padding).toBeUndefined()
     await pane.unmount()
-    // Light, even where the surface keeps its dark background: the page itself is light under the dark text.
-    expect(await page()).toBe('#f6f8fa')
-    pane = await $.ui.mount({ ...PANE, surface })
-    expect((await pane.find({ type: 'Text', text: /草稿要保留/ }))?.props.color).toBe('#1f2328')
-    await pane.press({ key: 'scheme' })
-    await pane.press({ key: 'scheme' })
-    await pane.unmount()
-    expect(await page()).toBe('#1e1f22')
   })
 }
 

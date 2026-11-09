@@ -1,6 +1,6 @@
 {
   "name": "intent-tracker",
-  "version": "0.15.13",
+  "version": "0.16.0",
   "description": "A side pane that keeps the current worktree's requests (in your own words) and their plain-language parts, ticks each once its check passes (or on your own yes), tracks cancels and changes of mind, and has an observer audit the ticks, the checks and drift.",
   "author": {
     "name": "GordanY"

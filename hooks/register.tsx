@@ -95,26 +95,13 @@ const baseline = atom(
 /** Whether the observer may run (the person's choice, saved for every session). */
 const isObserverOn = atom({ plugin: 'intent-tracker', key: 'isObserverOn' } as const, true)
 const OBSERVER_KEY = 'settings:observer'
-/** Which background the pane's colors are tuned for: the surface's own colors (auto), a dark one, or a light one. */
-const SCHEMES = ['auto', 'dark', 'light'] as const
-type Scheme = (typeof SCHEMES)[number]
-const SCHEME_KEY = 'settings:theme'
-const scheme = atom({ plugin: 'intent-tracker', key: 'scheme' } as const, 'auto' as Scheme)
-const asScheme = (value: unknown): Scheme => (SCHEMES.includes(value as Scheme) ? (value as Scheme) : 'auto')
 /**
- * The pane's colors for each scheme: done, being worked on, needs a look, and
- * danger, and the bar's fill. Auto keeps the terminal's named colors; dark and
- * light paint the pane's background too, and give every text and button
- * label its own color on it, so nothing is left in the surface's color.
+ * The pane's colors: done, being worked on, needs a look, and danger. Each is a
+ * theme key, so it follows the person's own Claude Code theme exactly; the pane
+ * paints no background of its own (see refreshTitle). The bar's fill is raw: a
+ * drawn bar (desktop) takes no theme key.
  */
-const PALETTES: Record<
-  Scheme,
-  { done: string; now: string; warn: string; danger: string; bar: string; background?: string; text?: string }
-> = {
-  auto: { done: 'green', now: 'cyan', warn: 'yellow', danger: 'red', bar: '#4caf50' },
-  dark: { done: '#5fd77a', now: '#56c8f0', warn: '#f0c674', danger: '#ff7b72', bar: '#5fd77a', background: '#1e1f22', text: '#e6e6e6' },
-  light: { done: '#1a7f37', now: '#0969da', warn: '#9a6700', danger: '#cf222e', bar: '#1a7f37', background: '#f6f8fa', text: '#1f2328' },
-}
+const COLORS = { done: 'success', now: 'suggestion', warn: 'warning', danger: 'error', bar: '#4caf50' } as const
 /** Every text the person writes in the pane, per worktree, only ever appended to: what was replaced can be found again. */
 const MINE_LOG_KEY = 'mine:'
 const MINE_LOG_MAX = 500
@@ -539,20 +526,16 @@ function resultNote(list: readonly Intent[]): string | null {
 
 const TOOLBAR_GAP = 2
 
-/**
- * A hairline as wide as its slot. Its shade follows the scheme: on the surface's own colors (auto) a mid grey
- * strong enough to show on light and dark alike; on a painted background a tint of its text color.
- */
-function ruleSvg(colors: Scheme): string {
-  const [fill, opacity] = colors === 'dark' ? ['#ffffff', '0.28'] : colors === 'light' ? ['#000000', '0.2'] : ['#8a8a8a', '0.75']
+/** A hairline as wide as its slot: a mid grey strong enough to show on light and dark alike. */
+function ruleSvg(): string {
   return (
     '<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1" viewBox="0 0 2000 1" preserveAspectRatio="none">' +
-    `<rect width="2000" height="1" fill="${fill}" fill-opacity="${opacity}"/></svg>`
+    '<rect width="2000" height="1" fill="#8a8a8a" fill-opacity="0.75"/></svg>'
   )
 }
 
 /** A progress bar as wide as its slot: a light track and the done share over it. */
-function progressSvg(share: number, fill = PALETTES.auto.bar): string {
+function progressSvg(share: number, fill: string = COLORS.bar): string {
   const done = Math.round(Math.max(0, Math.min(1, share)) * 2000)
   return (
     '<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="6" viewBox="0 0 2000 6" preserveAspectRatio="none">' +
@@ -606,9 +589,9 @@ async function refreshTitle($: EngineInterface, isAsked = false): Promise<void> 
   const { met, total } = progress(await read($, intents))
   const t = strings(await read($, lang))
   const title = total === 0 ? t.title : `${t.title} ${met}/${total}`
-  // Dark or light paint the pane's background; auto leaves the surface's own look (an open without it resets it).
-  const background = PALETTES[await read($, scheme)].background
-  await $.ui.open({ id: PANE, title, ...(background ? { backgroundColor: background } : {}) })
+  // Transparent: the pane paints nothing, its frame included, so the transcript's own background shows through
+  // and the pane sits on exactly the colors of the person's Claude Code theme, with no band of another shade.
+  await $.ui.open({ id: PANE, title, backgroundColor: 'transparent' })
 }
 
 /**
@@ -1273,8 +1256,6 @@ async function activate($: EngineInterface): Promise<void> {
   await update($, driftModel, () => stored)
   const observing = (await $.store.get(OBSERVER_KEY)) !== false
   await update($, isObserverOn, () => observing)
-  const savedScheme = asScheme(await $.store.get(SCHEME_KEY))
-  await update($, scheme, () => savedScheme)
   await update($, lang, () => chosen)
   await $.command.register({ name: 'intents', description: strings(chosen).command })
   await sweep($).catch(() => undefined)
@@ -1304,11 +1285,6 @@ async function activate($: EngineInterface): Promise<void> {
       if (sharedModel !== (await read($, driftModel))) await update($, driftModel, () => sharedModel)
       const sharedObserving = (await $.store.get(OBSERVER_KEY)) !== false
       if (sharedObserving !== (await read($, isObserverOn))) await update($, isObserverOn, () => sharedObserving)
-      const sharedScheme = asScheme(await $.store.get(SCHEME_KEY))
-      if (sharedScheme !== (await read($, scheme))) {
-        await update($, scheme, () => sharedScheme)
-        await refreshTitle($)
-      }
     })().catch(() => undefined)
   })
 }
@@ -1859,25 +1835,13 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const table = $.ui.resolve(e)
-    const { Box, Input } = table
-    const schemeNow = await read($, scheme)
-    const pal = PALETTES[schemeNow]
+    // Text and buttons keep the surface's own colors: the pane follows the person's Claude Code theme.
+    const { Box, Input, Text, Button } = table
+    const pal = COLORS
     // The pane is laid out in blocks on every surface: a header (purpose, progress, what runs now), each open
     // request a card, then what is done, the tools, and the footer (its settings on a line of their own).
     // Spacing uses step names, which each surface sizes its own way.
     const isDesk = e.surface !== 'terminal'
-    // On a painted background every text and button label gets the scheme's own color: one left in the
-    // surface's color (light text from a dark terminal) could vanish against it.
-    type TextArgs = Parameters<typeof table.Text>[0]
-    type ButtonArgs = Parameters<typeof table.Button>[0]
-    const Text = (props: TextArgs) => table.Text(pal.text && props.color === undefined ? { ...props, color: pal.text } : props)
-    const Button = (props: ButtonArgs) => {
-      const label = (props as { label?: string }).label
-      const kids = (props as { children?: unknown }).children
-      const hasKids = Array.isArray(kids) ? kids.length > 0 : kids !== undefined
-      if (!pal.text || !label || hasKids) return table.Button(props)
-      return table.Button({ ...props, children: [table.Text({ color: pal.text, dimColor: props.dimColor, children: [label] } as TextArgs)] } as ButtonArgs)
-    }
     // The terminal draws a line of box characters sized to the pane's columns;
     // a desktop (proportional font) wraps such a line, so it gets a 1px rule.
     const divider = (key: string) =>
@@ -1888,23 +1852,16 @@ export const register: Register = on => {
       ) : (
         // Stretched across the pane, so the line is as wide as the section it parts.
         <Box key={key} width="100%">
-          <table.Svg key={`${key}-line`} source={ruleSvg(schemeNow)} alt="" height={1} />
+          <table.Svg key={`${key}-line`} source={ruleSvg()} alt="" height={1} />
         </Box>
       )
     // Docked beside the transcript, the pane fills its room: the tools and settings sit at its bottom edge, and
     // only when the list is taller than the room do they move down with it (the end of the scroll). Seated inline
     // above the prompt, it stays as tall as its content.
     const fill = e.props.placement === 'dock' && e.props.scroll?.bodyRows ? e.props.scroll.bodyRows : undefined
+    // The page paints no background: under the transparent pane it sits on the transcript's own colors.
     const page = (top: JSX.Element, bottom: JSX.Element) => (
-      <Box
-        key="page"
-        flexDirection="column"
-        justifyContent="space-between"
-        {...(fill ? { minHeight: fill } : {})}
-        // Dark or light: the page paints its own background too. The pane's own background is a request a surface
-        // may not grant (the desktop app in its dark mode keeps its own), and dark text on it would vanish.
-        {...(pal.background ? { backgroundColor: pal.background, ...(isDesk ? { padding: 'sm' as const } : {}) } : {})}
-      >
+      <Box key="page" flexDirection="column" justifyContent="space-between" {...(fill ? { minHeight: fill } : {})}>
         {top}
         {bottom}
       </Box>
@@ -1919,7 +1876,6 @@ export const register: Register = on => {
     const isDoneShown = await read($, isDoneOpen)
     const checker = await read($, driftModel)
     const observing = await read($, isObserverOn)
-    const colors = await read($, scheme)
     const t = strings(chosen)
     const mainModel = modelName(await $.session.model().catch(() => t.mainSession))
     const columns = e.props.bodyColumns ?? 40
@@ -2088,18 +2044,6 @@ export const register: Register = on => {
             dimColor
             onPress={() => update($, editing, () => (isPicking ? null : 'lang'))}
           />
-          <Button
-            key="scheme"
-            label={`◐ ${t.scheme[colors]}`}
-            plain
-            dimColor
-            onPress={async () => {
-              const next = SCHEMES[(SCHEMES.indexOf(colors) + 1) % SCHEMES.length] ?? 'auto'
-              await update($, scheme, () => next)
-              await $.store.set(SCHEME_KEY, next)
-              await refreshTitle($)
-            }}
-          />
         </Box>
         {isPickingModel && (
           <Box flexDirection="row" gap={TOOLBAR_GAP} flexWrap="wrap">
@@ -2208,20 +2152,10 @@ export const register: Register = on => {
     const filled = Math.round(share * barWidth)
     const progressBar =
       e.surface === 'terminal' || !('Svg' in table) ? (
-        colors === 'auto' ? (
-          <Text dimColor>
-            {'▓'.repeat(filled)}
-            {'░'.repeat(barWidth - filled)} {countLabel}
-          </Text>
-        ) : (
-          // The done share in the scheme's color, the rest dim.
-          <Box flexDirection="row">
-            {filled > 0 && <Text key="bar-done" color={pal.bar}>{'▓'.repeat(filled)}</Text>}
-            <Text key="bar-rest" dimColor>
-              {'░'.repeat(barWidth - filled)} {countLabel}
-            </Text>
-          </Box>
-        )
+        <Text dimColor>
+          {'▓'.repeat(filled)}
+          {'░'.repeat(barWidth - filled)} {countLabel}
+        </Text>
       ) : (
         <Box flexDirection="row" gap={1} alignItems="center">
           <Box flexGrow={1}>
